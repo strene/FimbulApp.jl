@@ -4,6 +4,9 @@ using Test
 include(joinpath(@__DIR__, "..", "src", "CaseParameters.jl"))
 using .CaseParameters
 
+include(joinpath(@__DIR__, "..", "src", "Simulation.jl"))
+using .Simulation
+
 @testset "FimbulApp" begin
 
     @testset "CaseType enum" begin
@@ -177,6 +180,40 @@ using .CaseParameters
         @test CaseParameters.CASE_CATEGORIES[AGS] == :production
         @test CaseParameters.CASE_CATEGORIES[ATES] == :storage
         @test CaseParameters.CASE_CATEGORIES[BTES] == :storage
+    end
+
+    @testset "SimulationResult" begin
+        @testset "Default construction" begin
+            r = SimulationResult()
+            @test r.status == IDLE
+            @test r.message == ""
+            @test isempty(r.well_data)
+            @test isempty(r.timestamps)
+            @test isempty(r.reservoir_states)
+        end
+
+        @testset "ReservoirState" begin
+            d = Dict{String, Vector{Float64}}("Temperature" => [300.0, 310.0, 320.0])
+            s = ReservoirState(d)
+            @test s.data["Temperature"] == [300.0, 310.0, 320.0]
+        end
+
+        @testset "reservoir_states population" begin
+            r = SimulationResult()
+            push!(r.reservoir_states, ReservoirState(Dict("T" => [1.0, 2.0], "P" => [100.0, 200.0])))
+            push!(r.reservoir_states, ReservoirState(Dict("T" => [1.5, 2.5], "P" => [110.0, 210.0])))
+            @test length(r.reservoir_states) == 2
+            @test r.reservoir_states[1].data["T"] == [1.0, 2.0]
+            @test r.reservoir_states[2].data["P"] == [110.0, 210.0]
+        end
+
+        @testset "run_simulation fallback" begin
+            p = DoubletParams()
+            result = run_simulation(DOUBLET, p)
+            @test result.status == RUNNING
+            @test occursin("Fimbul.jl", result.message)
+            @test isempty(result.reservoir_states)
+        end
     end
 
 end

@@ -86,6 +86,17 @@ function Simulation.run_simulation(case_type::CaseType, params)
             result.well_data[string(wname)] = wdata
         end
         result.timestamps = t
+        # Extract reservoir states
+        for state in states
+            d = Dict{String, Vector{Float64}}()
+            for (k, v) in pairs(state)
+                sk = string(k)
+                if v isa AbstractVector{<:Real}
+                    d[sk] = Float64.(v)
+                end
+            end
+            push!(result.reservoir_states, Simulation.ReservoirState(d))
+        end
     catch e
         result.status = Simulation.FAILED
         result.message = "Simulation failed: $(sprint(showerror, e))"

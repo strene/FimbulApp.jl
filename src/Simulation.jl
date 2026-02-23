@@ -11,9 +11,14 @@ module Simulation
 using ..CaseParameters
 
 export SimulationStatus, IDLE, RUNNING, COMPLETED, FAILED
-export SimulationResult, run_simulation, setup_case
+export SimulationResult, run_simulation, setup_case, ReservoirState
 
 @enum SimulationStatus IDLE RUNNING COMPLETED FAILED
+
+"""Container for a single reservoir report step."""
+struct ReservoirState
+    data::Dict{String, Vector{Float64}}
+end
 
 """Container for simulation results."""
 mutable struct SimulationResult
@@ -21,7 +26,8 @@ mutable struct SimulationResult
     message::String
     well_data::Dict{String, Any}
     timestamps::Vector{Float64}
-    SimulationResult() = new(IDLE, "", Dict{String, Any}(), Float64[])
+    reservoir_states::Vector{ReservoirState}
+    SimulationResult() = new(IDLE, "", Dict{String, Any}(), Float64[], ReservoirState[])
 end
 
 """
