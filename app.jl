@@ -37,6 +37,13 @@ route("/css/style.css") do
     )
 end
 
+route("/js/vue.global.prod.js") do
+    Genie.Renderer.respond(
+        read(joinpath(PUBLIC_DIR, "js", "vue.global.prod.js"), String),
+        :javascript
+    )
+end
+
 route("/api/defaults/:case_type") do
     ct = parse_case_type(payload(:case_type))
     isnothing(ct) && return Genie.Renderer.respond("Invalid case type", :text, status=400)
@@ -239,7 +246,7 @@ function dashboard_html()
     </footer>
 </div>
 
-<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="/js/vue.global.prod.js"></script>
 <script>
 const { createApp, ref, reactive, computed, watch, onMounted } = Vue;
 

@@ -268,7 +268,7 @@ function params_to_dict(params)
 end
 
 """Create a parameter struct from a Dict{String, Any} (e.g., from JSON)."""
-function dict_to_params(case_type::CaseType, d::Dict)
+function dict_to_params(case_type::CaseType, d::AbstractDict)
     T = case_type == DOUBLET ? DoubletParams :
         case_type == EGS     ? EGSParams :
         case_type == AGS     ? AGSParams :
