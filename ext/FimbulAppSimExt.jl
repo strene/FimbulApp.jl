@@ -80,12 +80,12 @@ function Simulation.run_simulation(case_type::CaseType, params)
         sim_result = simulate_reservoir(case)
         result.status = Simulation.COMPLETED
         result.message = "Simulation completed successfully."
-        # Extract well data from results
-        ws = JutulDarcy.full_well_outputs(sim_result.model, sim_result.result)
-        for (wname, wdata) in ws
+        # Extract well data from results using JutulDarcy conventions
+        ws, states, t = sim_result
+        for (wname, wdata) in pairs(ws)
             result.well_data[string(wname)] = wdata
         end
-        result.timestamps = cumsum(case.dt)
+        result.timestamps = t
     catch e
         result.status = Simulation.FAILED
         result.message = "Simulation failed: $(sprint(showerror, e))"
