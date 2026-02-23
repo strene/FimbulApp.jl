@@ -1,0 +1,29 @@
+name = "FimbulApp"
+uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+authors = ["FimbulApp Contributors"]
+version = "0.1.0"
+
+[deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Genie = "c43c736e-a2d1-11e8-161f-af95571f1ab0"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+
+[weakdeps]
+Fimbul = "cac51d78-27de-4708-bd2b-bd13a82f652b"
+JutulDarcy = "82210473-ab04-4dce-b31b-11573c4f8e0a"
+
+[extensions]
+FimbulAppSimExt = ["Fimbul", "JutulDarcy"]
+
+[compat]
+Dates = "1"
+Genie = "5"
+JSON3 = "1"
+julia = "1.10"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
