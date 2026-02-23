@@ -1,7 +1,7 @@
 name = "FimbulApp"
 uuid = "b632efd5-19a4-48cd-9bec-d127d069c059"
-authors = ["FimbulApp Contributors"]
 version = "0.1.0"
+authors = ["FimbulApp Contributors"]
 
 [deps]
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
@@ -12,9 +12,10 @@ Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 [weakdeps]
 Fimbul = "cac51d78-27de-4708-bd2b-bd13a82f652b"
 JutulDarcy = "82210473-ab04-4dce-b31b-11573c4f8e0a"
+Jutul = "2b460a1a-8a2b-45b2-b125-b5c536396eb9"
 
 [extensions]
-FimbulAppSimExt = ["Fimbul", "JutulDarcy"]
+FimbulAppSimExt = ["Fimbul", "Jutul", "JutulDarcy"]
 
 [compat]
 Dates = "1"
