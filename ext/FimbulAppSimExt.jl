@@ -11,8 +11,8 @@ using FimbulApp.Simulation
 import FimbulApp.Simulation: setup_case, run_simulation
 
 # Unit helpers using JutulDarcy SI units
-const _darcy = si_unit(:darcy)
-const _atm = si_unit(:atm)
+const _darcy = JutulDarcy.si_unit(:darcy)
+const _atm = JutulDarcy.si_unit(:atm)
 
 """Convert user-facing parameters to Fimbul kwargs and create a simulation case."""
 function Simulation.setup_case(case_type::CaseType, params)
