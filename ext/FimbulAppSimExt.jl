@@ -8,11 +8,17 @@ using Fimbul, Jutul, JutulDarcy
 using FimbulApp.CaseParameters
 using FimbulApp.Simulation
 
-import FimbulApp.Simulation: setup_case, run_simulation
+import FimbulApp.Simulation: setup_case, run_simulation, convert_well_data, generate_reservoir_images!
+import Base64: base64encode
 
 # Unit helpers using JutulDarcy SI units
 const _darcy = si_unit(:darcy)
 const _atm = si_unit(:atm)
+
+# Unit conversion constants
+const _K_to_C = 273.15
+const _m3s_to_Ls = 1000.0
+const _Pa_to_bar = 1e-5
 
 """Convert user-facing parameters to Fimbul kwargs and create a simulation case."""
 function Simulation.setup_case(case_type::CaseType, params)
@@ -65,6 +71,66 @@ function Simulation.setup_case(case_type::CaseType, params)
     end
 end
 
+"""Convert well output data from SI units to user-friendly units."""
+function Simulation.convert_well_data(wdata)
+    converted = Dict{String, Any}()
+    for (key, vals) in pairs(wdata)
+        skey = string(key)
+        if vals isa AbstractVector{<:Real}
+            ckey, cvals = _convert_well_variable(skey, vals)
+            converted[ckey] = cvals
+        else
+            converted[skey] = vals
+        end
+    end
+    return converted
+end
+
+function _convert_well_variable(name::String, values)
+    ln = lowercase(name)
+    if occursin("temperature", ln)
+        return name * " [°C]", Float64.(values) .- _K_to_C
+    elseif occursin("rate", ln) && !occursin("mass", ln)
+        return name * " [L/s]", Float64.(values) .* _m3s_to_Ls
+    elseif occursin("pressure", ln) || ln == "bhp"
+        return name * " [bar]", Float64.(values) .* _Pa_to_bar
+    else
+        return name, Float64.(values)
+    end
+end
+
+"""Generate reservoir state images using Jutul's plot_cell_data and JutulDarcy's plot_well."""
+function Simulation.generate_reservoir_images!(result::Simulation.SimulationResult, case, states)
+    try
+        mesh = reservoir_domain(case)
+        vars = Symbol[]
+        for (k, v) in pairs(states[1])
+            if v isa AbstractVector{<:Real}
+                push!(vars, k)
+            end
+        end
+        for var in vars
+            svar = string(var)
+            images = String[]
+            for state in states
+                fig, ax, plt = Jutul.plot_cell_data(mesh, state[var])
+                try
+                    plot_well!(ax, mesh, case)
+                catch
+                end
+                io = IOBuffer()
+                show(io, MIME("image/png"), fig)
+                push!(images, base64encode(take!(io)))
+            end
+            result.reservoir_images[svar] = images
+        end
+        return true
+    catch e
+        @warn "Could not generate reservoir images (load CairoMakie for visualization): $e"
+        return false
+    end
+end
+
 """Run a full Fimbul simulation and return structured results."""
 function Simulation.run_simulation(case_type::CaseType, params)
     result = Simulation.SimulationResult()
@@ -80,22 +146,26 @@ function Simulation.run_simulation(case_type::CaseType, params)
         sim_result = simulate_reservoir(case)
         result.status = Simulation.COMPLETED
         result.message = "Simulation completed successfully."
-        # Extract well data from results using JutulDarcy conventions
+        # Extract well data from results with unit conversion
         ws, states, t = sim_result
         for (wname, wdata) in pairs(ws)
-            result.well_data[string(wname)] = wdata
+            result.well_data[string(wname)] = convert_well_data(wdata)
         end
         result.timestamps = t
-        # Extract reservoir states
-        for state in states
-            d = Dict{String, Vector{Float64}}()
-            for (k, v) in pairs(state)
-                sk = string(k)
-                if v isa AbstractVector{<:Real}
-                    d[sk] = Float64.(v)
+        # Generate reservoir images using plot_cell_data + plot_well
+        images_ok = generate_reservoir_images!(result, case, states)
+        # Fall back to raw state data if image generation failed
+        if !images_ok
+            for state in states
+                d = Dict{String, Vector{Float64}}()
+                for (k, v) in pairs(state)
+                    sk = string(k)
+                    if v isa AbstractVector{<:Real}
+                        d[sk] = Float64.(v)
+                    end
                 end
+                push!(result.reservoir_states, Simulation.ReservoirState(d))
             end
-            push!(result.reservoir_states, Simulation.ReservoirState(d))
         end
     catch e
         result.status = Simulation.FAILED

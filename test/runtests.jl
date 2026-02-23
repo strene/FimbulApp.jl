@@ -190,6 +190,7 @@ using .Simulation
             @test isempty(r.well_data)
             @test isempty(r.timestamps)
             @test isempty(r.reservoir_states)
+            @test isempty(r.reservoir_images)
         end
 
         @testset "ReservoirState" begin
@@ -207,12 +208,36 @@ using .Simulation
             @test r.reservoir_states[2].data["P"] == [110.0, 210.0]
         end
 
+        @testset "reservoir_images field" begin
+            r = SimulationResult()
+            r.reservoir_images["Temperature"] = ["base64img1", "base64img2"]
+            @test length(r.reservoir_images["Temperature"]) == 2
+            @test r.reservoir_images["Temperature"][1] == "base64img1"
+        end
+
         @testset "run_simulation fallback" begin
             p = DoubletParams()
             result = run_simulation(DOUBLET, p)
             @test result.status == RUNNING
             @test occursin("Fimbul.jl", result.message)
             @test isempty(result.reservoir_states)
+            @test isempty(result.reservoir_images)
+        end
+
+        @testset "convert_well_data default" begin
+            # Default implementation (no extension) returns data as-is
+            wdata = Dict(:rate => [0.01, 0.02], :Temperature => [350.0, 340.0])
+            converted = convert_well_data(wdata)
+            @test converted["rate"] == [0.01, 0.02]
+            @test converted["Temperature"] == [350.0, 340.0]
+        end
+
+        @testset "generate_reservoir_images! default" begin
+            # Default implementation is a no-op
+            r = SimulationResult()
+            result = generate_reservoir_images!(r, nothing, [])
+            @test result == false
+            @test isempty(r.reservoir_images)
         end
     end
 

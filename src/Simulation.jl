@@ -12,6 +12,7 @@ using ..CaseParameters
 
 export SimulationStatus, IDLE, RUNNING, COMPLETED, FAILED
 export SimulationResult, run_simulation, setup_case, ReservoirState
+export convert_well_data, generate_reservoir_images!
 
 @enum SimulationStatus IDLE RUNNING COMPLETED FAILED
 
@@ -27,7 +28,8 @@ mutable struct SimulationResult
     well_data::Dict{String, Any}
     timestamps::Vector{Float64}
     reservoir_states::Vector{ReservoirState}
-    SimulationResult() = new(IDLE, "", Dict{String, Any}(), Float64[], ReservoirState[])
+    reservoir_images::Dict{String, Vector{String}}
+    SimulationResult() = new(IDLE, "", Dict{String, Any}(), Float64[], ReservoirState[], Dict{String, Vector{String}}())
 end
 
 """
@@ -37,6 +39,32 @@ Set up a Fimbul simulation case from the given parameters.
 Returns `nothing` if Fimbul is not available.
 """
 function setup_case end
+
+"""
+    convert_well_data(wdata) -> Dict{String, Any}
+
+Convert well output data from SI units to user-friendly units.
+Default implementation returns data as-is (extension provides conversion).
+"""
+function convert_well_data(wdata)
+    converted = Dict{String, Any}()
+    for (key, vals) in pairs(wdata)
+        converted[string(key)] = vals
+    end
+    return converted
+end
+
+"""
+    generate_reservoir_images!(result, case, states)
+
+Generate pre-rendered reservoir state images using Jutul's plot_cell_data
+and JutulDarcy's plot_well. Requires a Makie backend (e.g. CairoMakie).
+Default implementation is a no-op (extension provides rendering).
+"""
+function generate_reservoir_images!(result::SimulationResult, case, states)
+    # No-op: the FimbulAppSimExt extension provides the actual rendering
+    return false
+end
 
 """
     run_simulation(case_type, params) -> SimulationResult

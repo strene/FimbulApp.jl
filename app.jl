@@ -87,7 +87,7 @@ route("/api/simulate", method=POST) do
     isnothing(ct) && return Genie.Renderer.respond("Invalid case type", :text, status=400)
     params = CaseParameters.dict_to_params(ct, data["params"])
     result = run_simulation(ct, params)
-    # Serialize reservoir states
+    # Serialize reservoir states (fallback raw data)
     rs_data = [Dict{String,Any}(k => v for (k, v) in pairs(s.data)) for s in result.reservoir_states]
     return Genie.Renderer.Json.json(Dict(
         :status => string(result.status),
@@ -95,6 +95,7 @@ route("/api/simulate", method=POST) do
         :well_data => result.well_data,
         :timestamps => result.timestamps,
         :reservoir_states => rs_data,
+        :reservoir_images => result.reservoir_images,
     ))
 end
 
@@ -271,12 +272,17 @@ function dashboard_html()
                             <span class="step-label">Step {{ currentStep + 1 }} / {{ totalSteps }}</span>
                         </div>
                         <div class="reservoir-canvas-wrapper">
-                            <canvas ref="reservoirCanvas" id="reservoir-canvas" width="480" height="320"></canvas>
-                            <canvas ref="colorbarCanvas" id="colorbar-canvas" width="480" height="30"></canvas>
-                            <div class="colorbar-labels">
-                                <span>{{ colorbarMin }}</span>
-                                <span>{{ colorbarMax }}</span>
-                            </div>
+                            <img v-if="currentReservoirImage"
+                                :src="'data:image/png;base64,' + currentReservoirImage"
+                                class="reservoir-image" alt="Reservoir state visualization" />
+                            <template v-else>
+                                <canvas ref="reservoirCanvas" id="reservoir-canvas" width="480" height="320"></canvas>
+                                <canvas ref="colorbarCanvas" id="colorbar-canvas" width="480" height="30"></canvas>
+                                <div class="colorbar-labels">
+                                    <span>{{ colorbarMin }}</span>
+                                    <span>{{ colorbarMax }}</span>
+                                </div>
+                            </template>
                         </div>
                     </div>
                     <div v-else class="no-data">No reservoir state data available.</div>
@@ -342,6 +348,7 @@ createApp({
         const isPlaying = ref(false);
         const colorbarMin = ref('');
         const colorbarMax = ref('');
+        const hasReservoirImages = ref(false);
         let playInterval = null;
 
         const wellNames = ref([]);
@@ -353,6 +360,16 @@ createApp({
         const reservoirCanvas = ref(null);
         const colorbarCanvas = ref(null);
         const wellCanvas = ref(null);
+
+        // Computed: current reservoir image (pre-rendered from server)
+        const currentReservoirImage = computed(() => {
+            const data = simResults.value;
+            if (!data || !data.reservoir_images) return '';
+            const images = data.reservoir_images[selectedReservoirVar.value];
+            if (!images || images.length === 0) return '';
+            const step = Math.min(currentStep.value, images.length - 1);
+            return images[step] || '';
+        });
 
         async function loadCaseDefaults(ct) {
             try {
@@ -429,18 +446,31 @@ createApp({
         }
 
         function populateResults(data) {
-            // Reservoir states
+            // Pre-rendered reservoir images (preferred)
+            const images = data.reservoir_images || {};
+            const imageVars = Object.keys(images);
+            // Fallback: raw reservoir state data
             const states = data.reservoir_states || [];
-            totalSteps.value = states.length;
-            currentStep.value = 0;
-            if (states.length > 0) {
+
+            if (imageVars.length > 0) {
+                hasReservoirImages.value = true;
+                reservoirVars.value = imageVars;
+                selectedReservoirVar.value = imageVars[0];
+                totalSteps.value = images[imageVars[0]].length;
+            } else if (states.length > 0) {
+                hasReservoirImages.value = false;
                 const vars = Object.keys(states[0]);
                 reservoirVars.value = vars;
                 selectedReservoirVar.value = vars.length > 0 ? vars[0] : '';
+                totalSteps.value = states.length;
             } else {
+                hasReservoirImages.value = false;
                 reservoirVars.value = [];
                 selectedReservoirVar.value = '';
+                totalSteps.value = 0;
             }
+            currentStep.value = 0;
+
             // Well data
             const wd = data.well_data || {};
             const names = Object.keys(wd);
@@ -458,14 +488,13 @@ createApp({
             // Switch to results tab and draw after DOM update
             activeTab.value = 'results';
             nextTick(() => {
-                drawReservoirState();
+                if (!hasReservoirImages.value) drawReservoirState();
                 drawWellPlot();
             });
         }
 
-        // --- Reservoir state drawing ---
+        // --- Reservoir state drawing (canvas fallback when no server images) ---
         function viridis(t) {
-            // Simplified viridis-like colormap
             t = Math.max(0, Math.min(1, t));
             const r = Math.round(255 * Math.min(1, Math.max(0, -1.26 + 4.59*t - 4.15*t*t + 1.17*t*t*t)));
             const g = Math.round(255 * Math.min(1, Math.max(0, -0.02 + 1.24*t - 0.66*t*t + 0.15*t*t*t)));
@@ -474,6 +503,9 @@ createApp({
         }
 
         function drawReservoirState() {
+            // Skip canvas drawing if using pre-rendered images
+            if (hasReservoirImages.value) return;
+
             const states = (simResults.value || {}).reservoir_states || [];
             const varName = selectedReservoirVar.value;
             if (states.length === 0 || !varName) return;
@@ -489,7 +521,6 @@ createApp({
             ctx.clearRect(0, 0, W, H);
 
             const n = vals.length;
-            // Determine grid layout: try to make roughly square
             const cols = Math.ceil(Math.sqrt(n));
             const rows = Math.ceil(n / cols);
             const cellW = W / cols;
@@ -507,7 +538,6 @@ createApp({
                 ctx.fillRect(col * cellW, row * cellH, cellW + 0.5, cellH + 0.5);
             }
 
-            // Draw colorbar
             colorbarMin.value = vmin.toExponential(2);
             colorbarMax.value = vmax.toExponential(2);
             const cbCanvas = colorbarCanvas.value || document.getElementById('colorbar-canvas');
@@ -526,13 +556,13 @@ createApp({
         function prevStep() {
             if (currentStep.value > 0) {
                 currentStep.value--;
-                drawReservoirState();
+                if (!hasReservoirImages.value) drawReservoirState();
             }
         }
         function nextStep() {
             if (currentStep.value < totalSteps.value - 1) {
                 currentStep.value++;
-                drawReservoirState();
+                if (!hasReservoirImages.value) drawReservoirState();
             }
         }
         function togglePlay() {
@@ -545,11 +575,10 @@ createApp({
                 playInterval = setInterval(() => {
                     if (currentStep.value < totalSteps.value - 1) {
                         currentStep.value++;
-                        drawReservoirState();
                     } else {
                         currentStep.value = 0;
-                        drawReservoirState();
                     }
+                    if (!hasReservoirImages.value) drawReservoirState();
                 }, 500);
             }
         }
@@ -670,7 +699,8 @@ createApp({
             simStatus, simMessage, isValid, activeTab,
             simResults, reservoirVars, selectedReservoirVar,
             currentStep, totalSteps, isPlaying,
-            colorbarMin, colorbarMax,
+            colorbarMin, colorbarMax, hasReservoirImages,
+            currentReservoirImage,
             wellNames, selectedWell, wellVars, selectedWellVar,
             reservoirCanvas, colorbarCanvas, wellCanvas,
             selectCase, onParamChange, resetDefaults,
