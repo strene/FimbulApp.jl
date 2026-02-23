@@ -45,7 +45,7 @@ Start the FimbulApp web server. Open http://localhost:<port> in a browser.
 """
 function start(; port::Int=8000, host::String="0.0.0.0")
     include(joinpath(@__DIR__, "..", "app.jl"))
-    _start_server(; port=port, host=host)
+    Base.invokelatest(_start_server; port=port, host=host)
 end
 
 end # module
