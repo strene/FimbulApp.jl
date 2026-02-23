@@ -116,7 +116,8 @@ function Simulation.generate_reservoir_images!(result::Simulation.SimulationResu
                 fig, ax, plt = Jutul.plot_cell_data(mesh, state[var])
                 try
                     plot_well!(ax, mesh, case)
-                catch
+                catch ew
+                    @debug "Could not overlay wells on reservoir plot" exception=ew
                 end
                 io = IOBuffer()
                 show(io, MIME("image/png"), fig)
