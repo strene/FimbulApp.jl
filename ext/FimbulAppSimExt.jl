@@ -4,7 +4,7 @@ Loaded automatically when both Fimbul and JutulDarcy are available.
 """
 module FimbulAppSimExt
 
-using Fimbul, Jutul, JutulDarcy
+using Fimbul, Jutul, JutulDarcy, CairoMakie
 using FimbulApp.CaseParameters
 using FimbulApp.Simulation
 
@@ -102,26 +102,21 @@ end
 """Generate reservoir state images using Jutul's plot_cell_data and JutulDarcy's plot_well."""
 function Simulation.generate_reservoir_images!(result::Simulation.SimulationResult, case, states)
     try
-        mesh = reservoir_domain(case)
-        vars = Symbol[]
-        for (k, v) in pairs(states[1])
-            if v isa AbstractVector{<:Real}
-                push!(vars, k)
-            end
-        end
+        mesh = physical_representation(reservoir_model(case.model).data_domain)
+        vars = [:Temperature]
         for var in vars
             svar = string(var)
             images = String[]
-            for state in states
-                fig, ax, plt = Jutul.plot_cell_data(mesh, state[var])
-                try
-                    plot_well!(ax, mesh, case)
-                catch ew
-                    @debug "Could not overlay wells on reservoir plot" exception=ew
-                end
+            for (n, state) in enumerate(states)
+                println(keys(state))
+                fig = Figure(size = (800, 600))
+                ax = Axis3(fig[1, 1], title = "Temperature at step $n (°C)", aspect = :data, zreversed=true)
+                Jutul.plot_cell_data!(ax, mesh, state[var])
                 io = IOBuffer()
                 show(io, MIME("image/png"), fig)
-                push!(images, base64encode(take!(io)))
+                img_data = take!(io)
+                base64_img = base64encode(img_data)
+                push!(images, "data:image/png;base64,$base64_img")
             end
             result.reservoir_images[svar] = images
         end
