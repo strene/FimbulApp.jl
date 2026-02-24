@@ -159,7 +159,7 @@ function Simulation.render_reservoir_image(var::AbstractString, step::Int; delta
         fig = Figure(size = (800, 600))
         ax = Axis3(fig[1, 1], title = title, aspect = :data, zreversed = true)
         p = Jutul.plot_cell_data!(ax, mesh, state[Symbol(var)], outer=true,
-            colormap=:seaborn_ice_fire_gradient, colorrange=(cmin, cmax))
+            colormap=:seaborn_icefire_gradient, colorrange=(cmin, cmax))
         Colorbar(fig[1, 2], p)
         io = IOBuffer()
         show(io, MIME("image/png"), fig)
