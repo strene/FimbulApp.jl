@@ -23,6 +23,7 @@ const _Pa_to_bar = 1e-5
 # Server-side state for lazy image rendering
 const _sim_case = Ref{Any}(nothing)
 const _sim_states = Ref{Any}(nothing)
+const _sim_state0 = Ref{Any}(nothing)
 const _image_cache = Dict{String, String}()
 
 """Convert user-facing parameters to Fimbul kwargs and create a simulation case."""
@@ -105,8 +106,8 @@ function _convert_well_variable(name::String, values)
 end
 
 """Render a single reservoir state image on demand with server-side caching."""
-function Simulation.render_reservoir_image(var::AbstractString, step::Int)
-    cache_key = "$var:$step"
+function Simulation.render_reservoir_image(var::AbstractString, step::Int; delta::Bool=false)
+    cache_key = "$var:$step:$delta"
     haskey(_image_cache, cache_key) && return _image_cache[cache_key]
 
     case = _sim_case[]
@@ -116,16 +117,24 @@ function Simulation.render_reservoir_image(var::AbstractString, step::Int)
 
     try
         mesh = physical_representation(reservoir_model(case.model).data_domain)
+        state = states[step]
+        title = "$var at step $step"
+        if delta
+            state0 = _sim_state0[]
+            isnothing(state0) && return ""
+            state = Jutul.delta_state(state, state0)
+            title = "Δ $var at step $step"
+        end
         fig = Figure(size = (800, 600))
-        ax = Axis3(fig[1, 1], title = "$var at step $step", aspect = :data, zreversed = true)
-        Jutul.plot_cell_data!(ax, mesh, states[step][Symbol(var)])
+        ax = Axis3(fig[1, 1], title = title, aspect = :data, zreversed = true)
+        Jutul.plot_cell_data!(ax, mesh, state[Symbol(var)])
         io = IOBuffer()
         show(io, MIME("image/png"), fig)
         img = base64encode(take!(io))
         _image_cache[cache_key] = img
         return img
     catch e
-        @warn "Failed to render reservoir image for $var step $step: $e"
+        @warn "Failed to render reservoir image for $var step $step (delta=$delta): $e"
         return ""
     end
 end
@@ -154,6 +163,7 @@ function Simulation.run_simulation(case_type::CaseType, params)
         # Store case and states for lazy image rendering
         _sim_case[] = case
         _sim_states[] = states
+        _sim_state0[] = haskey(case.state0, :Reservoir) ? case.state0[:Reservoir] : nothing
         empty!(_image_cache)
         # Populate reservoir variable names and step count
         result.num_steps = length(states)
