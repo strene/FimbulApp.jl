@@ -4,15 +4,26 @@ Loaded automatically when both Fimbul and JutulDarcy are available.
 """
 module FimbulAppSimExt
 
-using Fimbul, Jutul, JutulDarcy
+using Fimbul, Jutul, JutulDarcy, CairoMakie
 using FimbulApp.CaseParameters
 using FimbulApp.Simulation
 
-import FimbulApp.Simulation: setup_case, run_simulation
+import FimbulApp.Simulation: setup_case, run_simulation, convert_well_data, render_reservoir_image
+import Base64: base64encode
 
 # Unit helpers using JutulDarcy SI units
 const _darcy = si_unit(:darcy)
 const _atm = si_unit(:atm)
+
+# Unit conversion constants
+const _K_to_C = 273.15
+const _m3s_to_Ls = 1000.0
+const _Pa_to_bar = 1e-5
+
+# Server-side state for lazy image rendering
+const _sim_case = Ref{Any}(nothing)
+const _sim_states = Ref{Any}(nothing)
+const _image_cache = Dict{String, String}()
 
 """Convert user-facing parameters to Fimbul kwargs and create a simulation case."""
 function Simulation.setup_case(case_type::CaseType, params)
@@ -65,6 +76,60 @@ function Simulation.setup_case(case_type::CaseType, params)
     end
 end
 
+"""Convert well output data from SI units to user-friendly units."""
+function Simulation.convert_well_data(wdata)
+    converted = Dict{String, Any}()
+    for (key, vals) in pairs(wdata)
+        skey = string(key)
+        if vals isa AbstractVector{<:Real}
+            ckey, cvals = _convert_well_variable(skey, vals)
+            converted[ckey] = cvals
+        else
+            converted[skey] = vals
+        end
+    end
+    return converted
+end
+
+function _convert_well_variable(name::String, values)
+    ln = lowercase(name)
+    if occursin("temperature", ln)
+        return name * " [°C]", Float64.(values) .- _K_to_C
+    elseif occursin("rate", ln) && !occursin("mass", ln)
+        return name * " [L/s]", Float64.(values) .* _m3s_to_Ls
+    elseif occursin("pressure", ln) || ln == "bhp"
+        return name * " [bar]", Float64.(values) .* _Pa_to_bar
+    else
+        return name, Float64.(values)
+    end
+end
+
+"""Render a single reservoir state image on demand with server-side caching."""
+function Simulation.render_reservoir_image(var::AbstractString, step::Int)
+    cache_key = "$var:$step"
+    haskey(_image_cache, cache_key) && return _image_cache[cache_key]
+
+    case = _sim_case[]
+    states = _sim_states[]
+    (isnothing(case) || isnothing(states)) && return ""
+    (step < 1 || step > length(states)) && return ""
+
+    try
+        mesh = physical_representation(reservoir_model(case.model).data_domain)
+        fig = Figure(size = (800, 600))
+        ax = Axis3(fig[1, 1], title = "$var at step $step", aspect = :data, zreversed = true)
+        Jutul.plot_cell_data!(ax, mesh, states[step][Symbol(var)])
+        io = IOBuffer()
+        show(io, MIME("image/png"), fig)
+        img = base64encode(take!(io))
+        _image_cache[cache_key] = img
+        return img
+    catch e
+        @warn "Failed to render reservoir image for $var step $step: $e"
+        return ""
+    end
+end
+
 """Run a full Fimbul simulation and return structured results."""
 function Simulation.run_simulation(case_type::CaseType, params)
     result = Simulation.SimulationResult()
@@ -80,12 +145,25 @@ function Simulation.run_simulation(case_type::CaseType, params)
         sim_result = simulate_reservoir(case)
         result.status = Simulation.COMPLETED
         result.message = "Simulation completed successfully."
-        # Extract well data from results using JutulDarcy conventions
+        # Extract well data from results with unit conversion
         ws, states, t = sim_result
         for (wname, wdata) in pairs(ws)
-            result.well_data[string(wname)] = wdata
+            result.well_data[string(wname)] = convert_well_data(wdata)
         end
         result.timestamps = t
+        # Store case and states for lazy image rendering
+        _sim_case[] = case
+        _sim_states[] = states
+        empty!(_image_cache)
+        # Populate reservoir variable names and step count
+        result.num_steps = length(states)
+        if !isempty(states)
+            for (k, v) in pairs(states[1])
+                if v isa AbstractVector{<:Real}
+                    push!(result.reservoir_vars, string(k))
+                end
+            end
+        end
     catch e
         result.status = Simulation.FAILED
         result.message = "Simulation failed: $(sprint(showerror, e))"

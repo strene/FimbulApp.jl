@@ -4,20 +4,24 @@ version = "0.1.0"
 authors = ["FimbulApp Contributors"]
 
 [deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Genie = "c43c736e-a2d1-11e8-161f-af95117fbd1e"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 
 [weakdeps]
+Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 Fimbul = "cac51d78-27de-4708-bd2b-bd13a82f652b"
-JutulDarcy = "82210473-ab04-4dce-b31b-11573c4f8e0a"
 Jutul = "2b460a1a-8a2b-45b2-b125-b5c536396eb9"
+JutulDarcy = "82210473-ab04-4dce-b31b-11573c4f8e0a"
 
 [extensions]
-FimbulAppSimExt = ["Fimbul", "Jutul", "JutulDarcy"]
+FimbulAppSimExt = ["Fimbul", "Jutul", "JutulDarcy", "Base64"]
 
 [compat]
+Base64 = "1.11.0"
+CairoMakie = "0.15.8"
 Dates = "1"
 Genie = "5"
 JSON3 = "1"

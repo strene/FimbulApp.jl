@@ -4,6 +4,9 @@ using Test
 include(joinpath(@__DIR__, "..", "src", "CaseParameters.jl"))
 using .CaseParameters
 
+include(joinpath(@__DIR__, "..", "src", "Simulation.jl"))
+using .Simulation
+
 @testset "FimbulApp" begin
 
     @testset "CaseType enum" begin
@@ -177,6 +180,88 @@ using .CaseParameters
         @test CaseParameters.CASE_CATEGORIES[AGS] == :production
         @test CaseParameters.CASE_CATEGORIES[ATES] == :storage
         @test CaseParameters.CASE_CATEGORIES[BTES] == :storage
+    end
+
+    @testset "SimulationResult" begin
+        @testset "Default construction" begin
+            r = SimulationResult()
+            @test r.status == IDLE
+            @test r.message == ""
+            @test isempty(r.well_data)
+            @test isempty(r.timestamps)
+            @test isempty(r.reservoir_states)
+            @test isempty(r.reservoir_images)
+            @test isempty(r.reservoir_vars)
+            @test r.num_steps == 0
+        end
+
+        @testset "ReservoirState" begin
+            d = Dict{String, Vector{Float64}}("Temperature" => [300.0, 310.0, 320.0])
+            s = ReservoirState(d)
+            @test s.data["Temperature"] == [300.0, 310.0, 320.0]
+        end
+
+        @testset "reservoir_states population" begin
+            r = SimulationResult()
+            push!(r.reservoir_states, ReservoirState(Dict("T" => [1.0, 2.0], "P" => [100.0, 200.0])))
+            push!(r.reservoir_states, ReservoirState(Dict("T" => [1.5, 2.5], "P" => [110.0, 210.0])))
+            @test length(r.reservoir_states) == 2
+            @test r.reservoir_states[1].data["T"] == [1.0, 2.0]
+            @test r.reservoir_states[2].data["P"] == [110.0, 210.0]
+        end
+
+        @testset "reservoir_images field" begin
+            r = SimulationResult()
+            r.reservoir_images["Temperature"] = ["base64img1", "base64img2"]
+            @test length(r.reservoir_images["Temperature"]) == 2
+            @test r.reservoir_images["Temperature"][1] == "base64img1"
+        end
+
+        @testset "reservoir_vars and num_steps" begin
+            r = SimulationResult()
+            push!(r.reservoir_vars, "Temperature")
+            push!(r.reservoir_vars, "Pressure")
+            r.num_steps = 10
+            @test r.reservoir_vars == ["Temperature", "Pressure"]
+            @test r.num_steps == 10
+        end
+
+        @testset "run_simulation fallback" begin
+            p = DoubletParams()
+            result = run_simulation(DOUBLET, p)
+            @test result.status == RUNNING
+            @test occursin("Fimbul.jl", result.message)
+            @test isempty(result.reservoir_states)
+            @test isempty(result.reservoir_images)
+            @test isempty(result.reservoir_vars)
+            @test result.num_steps == 0
+        end
+
+        @testset "convert_well_data default" begin
+            # Default implementation (no extension) returns data as-is
+            wdata = Dict(:rate => [0.01, 0.02], :Temperature => [350.0, 340.0])
+            converted = convert_well_data(wdata)
+            @test converted["rate"] == [0.01, 0.02]
+            @test converted["Temperature"] == [350.0, 340.0]
+        end
+
+        @testset "generate_reservoir_images! default" begin
+            # Default implementation is a no-op
+            r = SimulationResult()
+            result = generate_reservoir_images!(r, nothing, [])
+            @test result == false
+            @test isempty(r.reservoir_images)
+        end
+
+        @testset "render_reservoir_image default" begin
+            # Default implementation returns empty string
+            img = render_reservoir_image("Temperature", 1)
+            @test img == ""
+            # SubString should also work
+            s = SubString("Temperature", 1)
+            img2 = render_reservoir_image(s, 1)
+            @test img2 == ""
+        end
     end
 
 end
