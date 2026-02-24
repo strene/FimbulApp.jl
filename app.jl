@@ -278,7 +278,7 @@ function dashboard_html()
                             <button class="btn btn-playback" @click="nextStep" :disabled="currentStep >= totalSteps - 1">▶</button>
                             <button class="btn btn-playback" @click="lastStep" :disabled="currentStep >= totalSteps - 1">⏭</button>
                             <input type="range" class="step-slider" min="0" :max="totalSteps - 1"
-                                v-model.number="currentStep" @input="fetchReservoirImage">
+                                v-model.number="currentStep" @input="fetchReservoirImage(); drawWellPlot()">
                             <span class="step-label">Step {{ currentStep + 1 }} / {{ totalSteps }}</span>
                         </div>
                         <div class="result-controls">
@@ -516,24 +516,28 @@ createApp({
             if (currentStep.value > 0) {
                 currentStep.value = 0;
                 fetchReservoirImage();
+                drawWellPlot();
             }
         }
         function lastStep() {
             if (currentStep.value < totalSteps.value - 1) {
                 currentStep.value = totalSteps.value - 1;
                 fetchReservoirImage();
+                drawWellPlot();
             }
         }
         function prevStep() {
             if (currentStep.value > 0) {
                 currentStep.value--;
                 fetchReservoirImage();
+                drawWellPlot();
             }
         }
         function nextStep() {
             if (currentStep.value < totalSteps.value - 1) {
                 currentStep.value++;
                 fetchReservoirImage();
+                drawWellPlot();
             }
         }
 
@@ -623,6 +627,20 @@ createApp({
             ctx.rotate(-Math.PI / 2);
             ctx.fillText(vname, 0, 0);
             ctx.restore();
+
+            // Dot for current reservoir timestep
+            const stepIdx = currentStep.value;
+            if (stepIdx >= 0 && stepIdx < xvals.length) {
+                const dotX = toX(xvals[stepIdx]);
+                const dotY = toY(yvals[stepIdx]);
+                ctx.beginPath();
+                ctx.arc(dotX, dotY, 5, 0, 2 * Math.PI);
+                ctx.fillStyle = '#e11d48';
+                ctx.fill();
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+            }
         }
 
         // Update well variables when well changes

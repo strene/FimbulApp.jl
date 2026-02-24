@@ -25,6 +25,7 @@ const _sim_case = Ref{Any}(nothing)
 const _sim_states = Ref{Any}(nothing)
 const _sim_state0 = Ref{Any}(nothing)
 const _image_cache = Dict{String, String}()
+const _colorrange_cache = Dict{String, Tuple{Float64, Float64}}()
 
 """Convert user-facing parameters to Fimbul kwargs and create a simulation case."""
 function Simulation.setup_case(case_type::CaseType, params)
@@ -105,6 +106,35 @@ function _convert_well_variable(name::String, values)
     end
 end
 
+"""Compute the global color range for a variable across all timesteps."""
+function _get_colorrange(var::AbstractString, delta::Bool)
+    cache_key = "$var:$delta"
+    haskey(_colorrange_cache, cache_key) && return _colorrange_cache[cache_key]
+
+    states = _sim_states[]
+    state0 = _sim_state0[]
+    isnothing(states) && return (0.0, 1.0)
+
+    sym = Symbol(var)
+    global_min = Inf
+    global_max = -Inf
+    for i in 1:length(states)
+        s = if delta && !isnothing(state0)
+            JutulDarcy.delta_state(state0, states[i])
+        else
+            states[i]
+        end
+        vals = s[sym]
+        lo, hi = extrema(vals)
+        global_min = min(global_min, lo)
+        global_max = max(global_max, hi)
+    end
+
+    result = (global_min, global_max)
+    _colorrange_cache[cache_key] = result
+    return result
+end
+
 """Render a single reservoir state image on demand with server-side caching."""
 function Simulation.render_reservoir_image(var::AbstractString, step::Int; delta::Bool=false)
     cache_key = "$var:$step:$delta"
@@ -122,12 +152,15 @@ function Simulation.render_reservoir_image(var::AbstractString, step::Int; delta
         if delta
             state0 = _sim_state0[]
             isnothing(state0) && return ""
-            state = JutulDarcy.delta_state(state, state0)
+            state = JutulDarcy.delta_state(state0, state)
             title = "Δ $var at step $step"
         end
+        cmin, cmax = _get_colorrange(var, delta)
         fig = Figure(size = (800, 600))
         ax = Axis3(fig[1, 1], title = title, aspect = :data, zreversed = true)
-        Jutul.plot_cell_data!(ax, mesh, state[Symbol(var)], outer=true)
+        p = Jutul.plot_cell_data!(ax, mesh, state[Symbol(var)], outer=true,
+            colormap=:seaborn_ice_fire_gradient, colorrange=(cmin, cmax))
+        Colorbar(fig[1, 2], p)
         io = IOBuffer()
         show(io, MIME("image/png"), fig)
         img = base64encode(take!(io))
@@ -165,6 +198,7 @@ function Simulation.run_simulation(case_type::CaseType, params)
         _sim_states[] = states
         _sim_state0[] = haskey(case.state0, :Reservoir) ? case.state0[:Reservoir] : nothing
         empty!(_image_cache)
+        empty!(_colorrange_cache)
         # Populate reservoir variable names and step count
         result.num_steps = length(states)
         if !isempty(states)
