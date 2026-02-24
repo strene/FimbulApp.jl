@@ -261,6 +261,9 @@ using .Simulation
             s = SubString("Temperature", 1)
             img2 = render_reservoir_image(s, 1)
             @test img2 == ""
+            # Delta mode should also return empty string
+            img3 = render_reservoir_image("Temperature", 1; delta=true)
+            @test img3 == ""
         end
     end
 

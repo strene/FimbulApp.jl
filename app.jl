@@ -104,7 +104,8 @@ route("/api/reservoir_image/:var/:step") do
     isnothing(step) && return Genie.Renderer.respond("Invalid step", :text, status=400)
     step < 0 && return Genie.Renderer.respond("Step must be non-negative", :text, status=400)
     step += 1  # Convert 0-indexed (frontend) to 1-indexed (Julia)
-    img = render_reservoir_image(var, step)
+    delta = get(Genie.Requests.getpayload(), "delta", "false") == "true"
+    img = render_reservoir_image(var, step; delta=delta)
     isempty(img) && return Genie.Renderer.respond("", :text, status=404)
     return Genie.Renderer.respond(img, :text)
 end
@@ -272,14 +273,19 @@ function dashboard_html()
                             </select>
                         </div>
                         <div class="playback-controls">
-                            <button class="btn btn-playback" @click="prevStep" :disabled="currentStep <= 0">⏮</button>
-                            <button class="btn btn-playback" @click="togglePlay">
-                                {{ isPlaying ? '⏸' : '▶' }}
-                            </button>
-                            <button class="btn btn-playback" @click="nextStep" :disabled="currentStep >= totalSteps - 1">⏭</button>
+                            <button class="btn btn-playback" @click="firstStep" :disabled="currentStep <= 0">⏮</button>
+                            <button class="btn btn-playback" @click="prevStep" :disabled="currentStep <= 0">◀</button>
+                            <button class="btn btn-playback" @click="nextStep" :disabled="currentStep >= totalSteps - 1">▶</button>
+                            <button class="btn btn-playback" @click="lastStep" :disabled="currentStep >= totalSteps - 1">⏭</button>
                             <input type="range" class="step-slider" min="0" :max="totalSteps - 1"
                                 v-model.number="currentStep" @input="fetchReservoirImage">
                             <span class="step-label">Step {{ currentStep + 1 }} / {{ totalSteps }}</span>
+                        </div>
+                        <div class="result-controls">
+                            <label class="control-label">
+                                <input type="checkbox" v-model="showDelta" @change="fetchReservoirImage">
+                                Show difference from initial state
+                            </label>
                         </div>
                         <div class="reservoir-canvas-wrapper">
                             <div v-if="imageLoading" class="loading-indicator">⏳ Rendering image...</div>
@@ -351,11 +357,10 @@ createApp({
         const selectedReservoirVar = ref('');
         const currentStep = ref(0);
         const totalSteps = ref(0);
-        const isPlaying = ref(false);
+        const showDelta = ref(false);
         const currentImageSrc = ref('');
         const imageLoading = ref(false);
         const imageCache = {};
-        let playInterval = null;
 
         const wellNames = ref([]);
         const selectedWell = ref('');
@@ -476,9 +481,10 @@ createApp({
         async function fetchReservoirImage() {
             const varName = selectedReservoirVar.value;
             const step = currentStep.value;
+            const delta = showDelta.value;
             if (!varName || totalSteps.value === 0) return;
 
-            const cacheKey = varName + ':' + step;
+            const cacheKey = varName + ':' + step + ':' + delta;
             if (imageCache[cacheKey]) {
                 currentImageSrc.value = imageCache[cacheKey];
                 return;
@@ -486,14 +492,15 @@ createApp({
 
             imageLoading.value = true;
             try {
-                const resp = await fetch('/api/reservoir_image/' + encodeURIComponent(varName) + '/' + step);
+                const url = '/api/reservoir_image/' + encodeURIComponent(varName) + '/' + step + '?delta=' + delta;
+                const resp = await fetch(url);
                 if (resp.ok) {
                     const base64 = await resp.text();
                     if (base64) {
                         const dataUri = 'data:image/png;base64,' + base64;
                         imageCache[cacheKey] = dataUri;
-                        // Only update if still on the same step/var
-                        if (selectedReservoirVar.value === varName && currentStep.value === step) {
+                        // Only update if still on the same step/var/delta
+                        if (selectedReservoirVar.value === varName && currentStep.value === step && showDelta.value === delta) {
                             currentImageSrc.value = dataUri;
                         }
                     }
@@ -505,6 +512,18 @@ createApp({
             }
         }
 
+        function firstStep() {
+            if (currentStep.value > 0) {
+                currentStep.value = 0;
+                fetchReservoirImage();
+            }
+        }
+        function lastStep() {
+            if (currentStep.value < totalSteps.value - 1) {
+                currentStep.value = totalSteps.value - 1;
+                fetchReservoirImage();
+            }
+        }
         function prevStep() {
             if (currentStep.value > 0) {
                 currentStep.value--;
@@ -515,23 +534,6 @@ createApp({
             if (currentStep.value < totalSteps.value - 1) {
                 currentStep.value++;
                 fetchReservoirImage();
-            }
-        }
-        function togglePlay() {
-            if (isPlaying.value) {
-                clearInterval(playInterval);
-                playInterval = null;
-                isPlaying.value = false;
-            } else {
-                isPlaying.value = true;
-                playInterval = setInterval(() => {
-                    if (currentStep.value < totalSteps.value - 1) {
-                        currentStep.value++;
-                    } else {
-                        currentStep.value = 0;
-                    }
-                    fetchReservoirImage();
-                }, 500);
             }
         }
 
@@ -650,14 +652,14 @@ createApp({
             caseType, caseInfo, params, paramErrors,
             simStatus, simMessage, isValid, activeTab,
             simResults, reservoirVars, selectedReservoirVar,
-            currentStep, totalSteps, isPlaying,
+            currentStep, totalSteps, showDelta,
             currentImageSrc, imageLoading,
             wellNames, selectedWell, wellVars, selectedWellVar,
             wellCanvas,
             selectCase, onParamChange, resetDefaults,
             runSimulation, formatValue,
             fetchReservoirImage, drawWellPlot,
-            prevStep, nextStep, togglePlay
+            firstStep, lastStep, prevStep, nextStep
         };
     }
 }).mount('#app');
