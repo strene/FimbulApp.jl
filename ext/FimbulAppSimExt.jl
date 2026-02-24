@@ -8,7 +8,7 @@ using Fimbul, Jutul, JutulDarcy, CairoMakie
 using FimbulApp.CaseParameters
 using FimbulApp.Simulation
 
-import FimbulApp.Simulation: setup_case, run_simulation, convert_well_data, generate_reservoir_images!
+import FimbulApp.Simulation: setup_case, run_simulation, convert_well_data, render_reservoir_image
 import Base64: base64encode
 
 # Unit helpers using JutulDarcy SI units
@@ -19,6 +19,11 @@ const _atm = si_unit(:atm)
 const _K_to_C = 273.15
 const _m3s_to_Ls = 1000.0
 const _Pa_to_bar = 1e-5
+
+# Server-side state for lazy image rendering
+const _sim_case = Ref{Any}(nothing)
+const _sim_states = Ref{Any}(nothing)
+const _image_cache = Dict{String, String}()
 
 """Convert user-facing parameters to Fimbul kwargs and create a simulation case."""
 function Simulation.setup_case(case_type::CaseType, params)
@@ -99,31 +104,29 @@ function _convert_well_variable(name::String, values)
     end
 end
 
-"""Generate reservoir state images using Jutul's plot_cell_data and JutulDarcy's plot_well."""
-function Simulation.generate_reservoir_images!(result::Simulation.SimulationResult, case, states)
+"""Render a single reservoir state image on demand with server-side caching."""
+function Simulation.render_reservoir_image(var::String, step::Int)
+    cache_key = "$var:$step"
+    haskey(_image_cache, cache_key) && return _image_cache[cache_key]
+
+    case = _sim_case[]
+    states = _sim_states[]
+    (isnothing(case) || isnothing(states)) && return ""
+    (step < 1 || step > length(states)) && return ""
+
     try
         mesh = physical_representation(reservoir_model(case.model).data_domain)
-        vars = [:Temperature]
-        for var in vars
-            svar = string(var)
-            images = String[]
-            for (n, state) in enumerate(states)
-                println(keys(state))
-                fig = Figure(size = (800, 600))
-                ax = Axis3(fig[1, 1], title = "Temperature at step $n (°C)", aspect = :data, zreversed=true)
-                Jutul.plot_cell_data!(ax, mesh, state[var])
-                io = IOBuffer()
-                show(io, MIME("image/png"), fig)
-                img_data = take!(io)
-                base64_img = base64encode(img_data)
-                push!(images, "data:image/png;base64,$base64_img")
-            end
-            result.reservoir_images[svar] = images
-        end
-        return true
+        fig = Figure(size = (800, 600))
+        ax = Axis3(fig[1, 1], title = "$var at step $step", aspect = :data, zreversed = true)
+        Jutul.plot_cell_data!(ax, mesh, states[step][Symbol(var)])
+        io = IOBuffer()
+        show(io, MIME("image/png"), fig)
+        img = base64encode(take!(io))
+        _image_cache[cache_key] = img
+        return img
     catch e
-        @warn "Could not generate reservoir images (load CairoMakie for visualization): $e"
-        return false
+        @warn "Failed to render reservoir image for $var step $step: $e"
+        return ""
     end
 end
 
@@ -148,19 +151,17 @@ function Simulation.run_simulation(case_type::CaseType, params)
             result.well_data[string(wname)] = convert_well_data(wdata)
         end
         result.timestamps = t
-        # Generate reservoir images using plot_cell_data + plot_well
-        images_ok = generate_reservoir_images!(result, case, states)
-        # Fall back to raw state data if image generation failed
-        if !images_ok
-            for state in states
-                d = Dict{String, Vector{Float64}}()
-                for (k, v) in pairs(state)
-                    sk = string(k)
-                    if v isa AbstractVector{<:Real}
-                        d[sk] = Float64.(v)
-                    end
+        # Store case and states for lazy image rendering
+        _sim_case[] = case
+        _sim_states[] = states
+        empty!(_image_cache)
+        # Populate reservoir variable names and step count
+        result.num_steps = length(states)
+        if !isempty(states)
+            for (k, v) in pairs(states[1])
+                if v isa AbstractVector{<:Real}
+                    push!(result.reservoir_vars, string(k))
                 end
-                push!(result.reservoir_states, Simulation.ReservoirState(d))
             end
         end
     catch e

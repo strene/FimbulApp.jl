@@ -87,16 +87,26 @@ route("/api/simulate", method=POST) do
     isnothing(ct) && return Genie.Renderer.respond("Invalid case type", :text, status=400)
     params = CaseParameters.dict_to_params(ct, data["params"])
     result = run_simulation(ct, params)
-    # Serialize reservoir states (fallback raw data)
-    rs_data = [Dict{String,Any}(k => v for (k, v) in pairs(s.data)) for s in result.reservoir_states]
     return Genie.Renderer.Json.json(Dict(
         :status => string(result.status),
         :message => result.message,
         :well_data => result.well_data,
         :timestamps => result.timestamps,
-        :reservoir_states => rs_data,
-        :reservoir_images => result.reservoir_images,
+        :reservoir_vars => result.reservoir_vars,
+        :num_steps => result.num_steps,
     ))
+end
+
+route("/api/reservoir_image/:var/:step") do
+    var = payload(:var)
+    step_str = payload(:step)
+    step = tryparse(Int, step_str)
+    isnothing(step) && return Genie.Renderer.respond("Invalid step", :text, status=400)
+    step < 0 && return Genie.Renderer.respond("Step must be non-negative", :text, status=400)
+    step += 1  # Convert 0-indexed (frontend) to 1-indexed (Julia)
+    img = render_reservoir_image(var, step)
+    isempty(img) && return Genie.Renderer.respond("", :text, status=404)
+    return Genie.Renderer.respond(img, :text)
 end
 
 # ---------------------------------------------------------------------------
@@ -257,7 +267,7 @@ function dashboard_html()
                     <div v-if="reservoirVars.length > 0">
                         <div class="result-controls">
                             <label class="control-label">Variable:</label>
-                            <select class="control-select" v-model="selectedReservoirVar" @change="drawReservoirState">
+                            <select class="control-select" v-model="selectedReservoirVar" @change="fetchReservoirImage">
                                 <option v-for="v in reservoirVars" :key="v" :value="v">{{ v }}</option>
                             </select>
                         </div>
@@ -268,21 +278,17 @@ function dashboard_html()
                             </button>
                             <button class="btn btn-playback" @click="nextStep" :disabled="currentStep >= totalSteps - 1">⏭</button>
                             <input type="range" class="step-slider" min="0" :max="totalSteps - 1"
-                                v-model.number="currentStep" @input="drawReservoirState">
+                                v-model.number="currentStep" @input="fetchReservoirImage">
                             <span class="step-label">Step {{ currentStep + 1 }} / {{ totalSteps }}</span>
                         </div>
                         <div class="reservoir-canvas-wrapper">
-                            <img v-if="currentReservoirImage"
-                                :src="'data:image/png;base64,' + currentReservoirImage"
+                            <div v-if="imageLoading" class="loading-indicator">⏳ Rendering image...</div>
+                            <img v-if="currentImageSrc"
+                                :src="currentImageSrc"
                                 class="reservoir-image" alt="Reservoir state visualization" />
-                            <template v-else>
-                                <canvas ref="reservoirCanvas" id="reservoir-canvas" width="480" height="320"></canvas>
-                                <canvas ref="colorbarCanvas" id="colorbar-canvas" width="480" height="30"></canvas>
-                                <div class="colorbar-labels">
-                                    <span>{{ colorbarMin }}</span>
-                                    <span>{{ colorbarMax }}</span>
-                                </div>
-                            </template>
+                            <div v-if="!currentImageSrc && !imageLoading" class="no-data">
+                                Select a variable and step to view the reservoir state.
+                            </div>
                         </div>
                     </div>
                     <div v-else class="no-data">No reservoir state data available.</div>
@@ -346,9 +352,9 @@ createApp({
         const currentStep = ref(0);
         const totalSteps = ref(0);
         const isPlaying = ref(false);
-        const colorbarMin = ref('');
-        const colorbarMax = ref('');
-        const hasReservoirImages = ref(false);
+        const currentImageSrc = ref('');
+        const imageLoading = ref(false);
+        const imageCache = {};
         let playInterval = null;
 
         const wellNames = ref([]);
@@ -357,19 +363,7 @@ createApp({
         const selectedWellVar = ref('');
 
         // Canvas refs
-        const reservoirCanvas = ref(null);
-        const colorbarCanvas = ref(null);
         const wellCanvas = ref(null);
-
-        // Computed: current reservoir image (pre-rendered from server)
-        const currentReservoirImage = computed(() => {
-            const data = simResults.value;
-            if (!data || !data.reservoir_images) return '';
-            const images = data.reservoir_images[selectedReservoirVar.value];
-            if (!images || images.length === 0) return '';
-            const step = Math.min(currentStep.value, images.length - 1);
-            return images[step] || '';
-        });
 
         async function loadCaseDefaults(ct) {
             try {
@@ -446,30 +440,15 @@ createApp({
         }
 
         function populateResults(data) {
-            // Pre-rendered reservoir images (preferred)
-            const images = data.reservoir_images || {};
-            const imageVars = Object.keys(images);
-            // Fallback: raw reservoir state data
-            const states = data.reservoir_states || [];
-
-            if (imageVars.length > 0) {
-                hasReservoirImages.value = true;
-                reservoirVars.value = imageVars;
-                selectedReservoirVar.value = imageVars[0];
-                totalSteps.value = images[imageVars[0]].length;
-            } else if (states.length > 0) {
-                hasReservoirImages.value = false;
-                const vars = Object.keys(states[0]);
-                reservoirVars.value = vars;
-                selectedReservoirVar.value = vars.length > 0 ? vars[0] : '';
-                totalSteps.value = states.length;
-            } else {
-                hasReservoirImages.value = false;
-                reservoirVars.value = [];
-                selectedReservoirVar.value = '';
-                totalSteps.value = 0;
-            }
+            // Reservoir variables and step count from server
+            const vars = data.reservoir_vars || [];
+            reservoirVars.value = vars;
+            selectedReservoirVar.value = vars.length > 0 ? vars[0] : '';
+            totalSteps.value = data.num_steps || 0;
             currentStep.value = 0;
+            currentImageSrc.value = '';
+            // Clear client-side image cache
+            Object.keys(imageCache).forEach(k => delete imageCache[k]);
 
             // Well data
             const wd = data.well_data || {};
@@ -488,81 +467,54 @@ createApp({
             // Switch to results tab and draw after DOM update
             activeTab.value = 'results';
             nextTick(() => {
-                if (!hasReservoirImages.value) drawReservoirState();
+                fetchReservoirImage();
                 drawWellPlot();
             });
         }
 
-        // --- Reservoir state drawing (canvas fallback when no server images) ---
-        function viridis(t) {
-            t = Math.max(0, Math.min(1, t));
-            const r = Math.round(255 * Math.min(1, Math.max(0, -1.26 + 4.59*t - 4.15*t*t + 1.17*t*t*t)));
-            const g = Math.round(255 * Math.min(1, Math.max(0, -0.02 + 1.24*t - 0.66*t*t + 0.15*t*t*t)));
-            const b = Math.round(255 * Math.min(1, Math.max(0, 0.34 + 1.55*t - 3.36*t*t + 1.75*t*t*t)));
-            return 'rgb(' + r + ',' + g + ',' + b + ')';
-        }
-
-        function drawReservoirState() {
-            // Skip canvas drawing if using pre-rendered images
-            if (hasReservoirImages.value) return;
-
-            const states = (simResults.value || {}).reservoir_states || [];
+        // --- Lazy reservoir image fetching with client-side cache ---
+        async function fetchReservoirImage() {
             const varName = selectedReservoirVar.value;
-            if (states.length === 0 || !varName) return;
-            const step = Math.min(currentStep.value, states.length - 1);
-            const vals = states[step][varName];
-            if (!vals || vals.length === 0) return;
+            const step = currentStep.value;
+            if (!varName || totalSteps.value === 0) return;
 
-            const canvas = reservoirCanvas.value || document.getElementById('reservoir-canvas');
-            if (!canvas) return;
-            const ctx = canvas.getContext('2d');
-            const W = canvas.width;
-            const H = canvas.height;
-            ctx.clearRect(0, 0, W, H);
-
-            const n = vals.length;
-            const cols = Math.ceil(Math.sqrt(n));
-            const rows = Math.ceil(n / cols);
-            const cellW = W / cols;
-            const cellH = H / rows;
-
-            const vmin = Math.min(...vals);
-            const vmax = Math.max(...vals);
-            const range = vmax - vmin || 1;
-
-            for (let i = 0; i < n; i++) {
-                const col = i % cols;
-                const row = Math.floor(i / cols);
-                const t = (vals[i] - vmin) / range;
-                ctx.fillStyle = viridis(t);
-                ctx.fillRect(col * cellW, row * cellH, cellW + 0.5, cellH + 0.5);
+            const cacheKey = varName + ':' + step;
+            if (imageCache[cacheKey]) {
+                currentImageSrc.value = imageCache[cacheKey];
+                return;
             }
 
-            colorbarMin.value = vmin.toExponential(2);
-            colorbarMax.value = vmax.toExponential(2);
-            const cbCanvas = colorbarCanvas.value || document.getElementById('colorbar-canvas');
-            if (cbCanvas) {
-                const cbCtx = cbCanvas.getContext('2d');
-                const cbW = cbCanvas.width;
-                const cbH = cbCanvas.height;
-                cbCtx.clearRect(0, 0, cbW, cbH);
-                for (let x = 0; x < cbW; x++) {
-                    cbCtx.fillStyle = viridis(x / cbW);
-                    cbCtx.fillRect(x, 0, 1, cbH);
+            imageLoading.value = true;
+            try {
+                const resp = await fetch('/api/reservoir_image/' + encodeURIComponent(varName) + '/' + step);
+                if (resp.ok) {
+                    const base64 = await resp.text();
+                    if (base64) {
+                        const dataUri = 'data:image/png;base64,' + base64;
+                        imageCache[cacheKey] = dataUri;
+                        // Only update if still on the same step/var
+                        if (selectedReservoirVar.value === varName && currentStep.value === step) {
+                            currentImageSrc.value = dataUri;
+                        }
+                    }
                 }
+            } catch (e) {
+                console.error('Failed to fetch reservoir image:', e);
+            } finally {
+                imageLoading.value = false;
             }
         }
 
         function prevStep() {
             if (currentStep.value > 0) {
                 currentStep.value--;
-                if (!hasReservoirImages.value) drawReservoirState();
+                fetchReservoirImage();
             }
         }
         function nextStep() {
             if (currentStep.value < totalSteps.value - 1) {
                 currentStep.value++;
-                if (!hasReservoirImages.value) drawReservoirState();
+                fetchReservoirImage();
             }
         }
         function togglePlay() {
@@ -578,7 +530,7 @@ createApp({
                     } else {
                         currentStep.value = 0;
                     }
-                    if (!hasReservoirImages.value) drawReservoirState();
+                    fetchReservoirImage();
                 }, 500);
             }
         }
@@ -699,13 +651,12 @@ createApp({
             simStatus, simMessage, isValid, activeTab,
             simResults, reservoirVars, selectedReservoirVar,
             currentStep, totalSteps, isPlaying,
-            colorbarMin, colorbarMax, hasReservoirImages,
-            currentReservoirImage,
+            currentImageSrc, imageLoading,
             wellNames, selectedWell, wellVars, selectedWellVar,
-            reservoirCanvas, colorbarCanvas, wellCanvas,
+            wellCanvas,
             selectCase, onParamChange, resetDefaults,
             runSimulation, formatValue,
-            drawReservoirState, drawWellPlot,
+            fetchReservoirImage, drawWellPlot,
             prevStep, nextStep, togglePlay
         };
     }

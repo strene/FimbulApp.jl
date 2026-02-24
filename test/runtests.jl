@@ -191,6 +191,8 @@ using .Simulation
             @test isempty(r.timestamps)
             @test isempty(r.reservoir_states)
             @test isempty(r.reservoir_images)
+            @test isempty(r.reservoir_vars)
+            @test r.num_steps == 0
         end
 
         @testset "ReservoirState" begin
@@ -215,6 +217,15 @@ using .Simulation
             @test r.reservoir_images["Temperature"][1] == "base64img1"
         end
 
+        @testset "reservoir_vars and num_steps" begin
+            r = SimulationResult()
+            push!(r.reservoir_vars, "Temperature")
+            push!(r.reservoir_vars, "Pressure")
+            r.num_steps = 10
+            @test r.reservoir_vars == ["Temperature", "Pressure"]
+            @test r.num_steps == 10
+        end
+
         @testset "run_simulation fallback" begin
             p = DoubletParams()
             result = run_simulation(DOUBLET, p)
@@ -222,6 +233,8 @@ using .Simulation
             @test occursin("Fimbul.jl", result.message)
             @test isempty(result.reservoir_states)
             @test isempty(result.reservoir_images)
+            @test isempty(result.reservoir_vars)
+            @test result.num_steps == 0
         end
 
         @testset "convert_well_data default" begin
@@ -238,6 +251,12 @@ using .Simulation
             result = generate_reservoir_images!(r, nothing, [])
             @test result == false
             @test isempty(r.reservoir_images)
+        end
+
+        @testset "render_reservoir_image default" begin
+            # Default implementation returns empty string
+            img = render_reservoir_image("Temperature", 1)
+            @test img == ""
         end
     end
 

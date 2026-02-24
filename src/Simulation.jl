@@ -12,7 +12,7 @@ using ..CaseParameters
 
 export SimulationStatus, IDLE, RUNNING, COMPLETED, FAILED
 export SimulationResult, run_simulation, setup_case, ReservoirState
-export convert_well_data, generate_reservoir_images!
+export convert_well_data, generate_reservoir_images!, render_reservoir_image
 
 @enum SimulationStatus IDLE RUNNING COMPLETED FAILED
 
@@ -29,7 +29,9 @@ mutable struct SimulationResult
     timestamps::Vector{Float64}
     reservoir_states::Vector{ReservoirState}
     reservoir_images::Dict{String, Vector{String}}
-    SimulationResult() = new(IDLE, "", Dict{String, Any}(), Float64[], ReservoirState[], Dict{String, Vector{String}}())
+    reservoir_vars::Vector{String}
+    num_steps::Int
+    SimulationResult() = new(IDLE, "", Dict{String, Any}(), Float64[], ReservoirState[], Dict{String, Vector{String}}(), String[], 0)
 end
 
 """
@@ -64,6 +66,18 @@ Default implementation is a no-op (extension provides rendering).
 function generate_reservoir_images!(result::SimulationResult, case, states)
     # No-op: the FimbulAppSimExt extension provides the actual rendering
     return false
+end
+
+"""
+    render_reservoir_image(var, step) -> String
+
+Render a single reservoir state image on demand for the given variable name
+and 1-based step index. Returns a base64-encoded PNG string, or empty string
+if rendering is not available. Results are cached server-side.
+Default implementation returns empty string (extension provides rendering).
+"""
+function render_reservoir_image(var::String, step::Int)
+    return ""
 end
 
 """
