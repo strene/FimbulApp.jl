@@ -271,7 +271,7 @@ function run_simulation(case_type::CaseType, params)
         # Store case and states for lazy image rendering
         _sim_case[] = case
         _sim_states[] = states
-        _sim_state0[] = haskey(case.state0, :Reservoir) ? case.state0[:Reservoir] : nothing
+        _sim_state0[] = get(case.state0, :Reservoir, nothing)
         empty!(_image_cache)
         empty!(_colorrange_cache)
         # Populate reservoir variable names and step count

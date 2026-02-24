@@ -9,7 +9,11 @@ const HAS_SIM_DEPS = try
     include(joinpath(@__DIR__, "..", "src", "Simulation.jl"))
     true
 catch e
-    @warn "Skipping Simulation tests: required packages not available" exception=e
+    if isa(e, ArgumentError) || (isa(e, LoadError) && isa(e.error, ArgumentError))
+        @warn "Skipping Simulation tests: required packages not available" exception=e
+    else
+        rethrow(e)
+    end
     false
 end
 
