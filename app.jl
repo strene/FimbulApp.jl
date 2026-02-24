@@ -595,7 +595,7 @@ createApp({
                 const yv = ymin + (i / nTicks) * yrange;
                 const py = toY(yv);
                 ctx.beginPath(); ctx.moveTo(ml, py); ctx.lineTo(ml + pw, py); ctx.stroke();
-                ctx.fillText(yv.toExponential(1), ml - 5, py + 4);
+                ctx.fillText(yv.toFixed(1), ml - 5, py + 4);
             }
 
             // Axes border
