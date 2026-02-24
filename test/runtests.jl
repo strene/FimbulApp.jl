@@ -257,6 +257,10 @@ using .Simulation
             # Default implementation returns empty string
             img = render_reservoir_image("Temperature", 1)
             @test img == ""
+            # SubString should also work
+            s = SubString("Temperature", 1)
+            img2 = render_reservoir_image(s, 1)
+            @test img2 == ""
         end
     end
 

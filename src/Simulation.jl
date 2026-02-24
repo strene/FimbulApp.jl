@@ -76,7 +76,7 @@ and 1-based step index. Returns a base64-encoded PNG string, or empty string
 if rendering is not available. Results are cached server-side.
 Default implementation returns empty string (extension provides rendering).
 """
-function render_reservoir_image(var::String, step::Int)
+function render_reservoir_image(var::AbstractString, step::Int)
     return ""
 end
 

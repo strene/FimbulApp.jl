@@ -105,7 +105,7 @@ function _convert_well_variable(name::String, values)
 end
 
 """Render a single reservoir state image on demand with server-side caching."""
-function Simulation.render_reservoir_image(var::String, step::Int)
+function Simulation.render_reservoir_image(var::AbstractString, step::Int)
     cache_key = "$var:$step"
     haskey(_image_cache, cache_key) && return _image_cache[cache_key]
 
