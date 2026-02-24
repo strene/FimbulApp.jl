@@ -122,12 +122,12 @@ function Simulation.render_reservoir_image(var::AbstractString, step::Int; delta
         if delta
             state0 = _sim_state0[]
             isnothing(state0) && return ""
-            state = Jutul.delta_state(state, state0)
+            state = JutulDarcy.delta_state(state, state0)
             title = "Δ $var at step $step"
         end
         fig = Figure(size = (800, 600))
         ax = Axis3(fig[1, 1], title = title, aspect = :data, zreversed = true)
-        Jutul.plot_cell_data!(ax, mesh, state[Symbol(var)])
+        Jutul.plot_cell_data!(ax, mesh, state[Symbol(var)], outer=true)
         io = IOBuffer()
         show(io, MIME("image/png"), fig)
         img = base64encode(take!(io))
@@ -151,7 +151,7 @@ function Simulation.run_simulation(case_type::CaseType, params)
     try
         result.status = Simulation.RUNNING
         case = setup_case(case_type, params)
-        sim_result = simulate_reservoir(case)
+        sim_result = simulate_reservoir(case[1:5])
         result.status = Simulation.COMPLETED
         result.message = "Simulation completed successfully."
         # Extract well data from results with unit conversion
