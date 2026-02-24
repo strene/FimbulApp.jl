@@ -267,7 +267,7 @@ function run_simulation(case_type::CaseType, params)
         for (wname, wdata) in pairs(ws)
             result.well_data[string(wname)] = convert_well_data(wdata)
         end
-        result.timestamps = t
+        result.timestamps = convert_from_si.(t, :day)
         # Store case and states for lazy image rendering
         _sim_case[] = case
         _sim_states[] = states

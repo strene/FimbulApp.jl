@@ -621,7 +621,7 @@ createApp({
             ctx.fillStyle = '#1e293b';
             ctx.font = '12px sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText('Time', ml + pw / 2, H - 5);
+            ctx.fillText('Time [days]', ml + pw / 2, H - 5);
             ctx.save();
             ctx.translate(14, mt + ph / 2);
             ctx.rotate(-Math.PI / 2);
