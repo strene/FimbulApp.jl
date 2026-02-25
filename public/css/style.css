@@ -502,6 +502,124 @@ body {
 }
 .app-footer a:hover { text-decoration: underline; }
 
+/* Export Section */
+.export-section {
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+}
+.export-section h4 {
+    font-size: 0.95rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-muted);
+}
+.export-controls {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+.export-filename {
+    flex: 1;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.85rem;
+    background: #f8fafc;
+}
+.export-filename:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(37,99,235,0.15);
+}
+.btn-export {
+    padding: 0.4rem 1rem;
+    background: var(--success);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s ease;
+}
+.btn-export:hover {
+    background: #15803d;
+    box-shadow: var(--shadow);
+}
+
+/* Cache & Compare Section */
+.cache-section {
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+}
+.cache-section h4 {
+    font-size: 0.95rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-muted);
+}
+.btn-cache {
+    padding: 0.4rem 1rem;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-bottom: 0.5rem;
+}
+.btn-cache:hover {
+    background: var(--primary-dark);
+    box-shadow: var(--shadow);
+}
+.cached-list {
+    margin-top: 0.5rem;
+}
+.cached-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.35rem 0.5rem;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: 0.8rem;
+}
+.cached-item:last-child { border-bottom: none; }
+.cached-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: pointer;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.cached-color {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+.btn-remove-cache {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.9rem;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+.btn-remove-cache:hover {
+    background: #fef2f2;
+    color: var(--error);
+}
+
 /* Scrollbar */
 .param-list::-webkit-scrollbar { width: 6px; }
 .param-list::-webkit-scrollbar-track { background: transparent; }

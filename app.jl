@@ -319,6 +319,33 @@ function dashboard_html()
                         <div class="well-canvas-wrapper">
                             <canvas ref="wellCanvas" id="well-canvas" width="560" height="360"></canvas>
                         </div>
+
+                        <!-- Export CSV -->
+                        <div class="export-section">
+                            <h4>💾 Export Results</h4>
+                            <div class="export-controls">
+                                <input class="export-filename" type="text" v-model="exportFilename"
+                                    placeholder="filename.csv">
+                                <button class="btn btn-export" @click="exportCSV">📥 Export CSV</button>
+                            </div>
+                        </div>
+
+                        <!-- Cache & Compare -->
+                        <div class="cache-section">
+                            <h4>📋 Compare Results</h4>
+                            <button class="btn btn-cache" @click="cacheCurrentResult">➕ Cache Current Result</button>
+                            <div class="cached-list" v-if="cachedResults.length > 0">
+                                <div class="cached-item" v-for="(cr, idx) in cachedResults" :key="idx">
+                                    <label class="cached-label">
+                                        <input type="checkbox" v-model="cr.visible" @change="drawWellPlot">
+                                        <span class="cached-color" :style="{background: comparisonColors[idx % comparisonColors.length]}"></span>
+                                        {{ cr.label }}
+                                    </label>
+                                    <button class="btn-remove-cache" @click="removeCachedResult(idx)">✕</button>
+                                </div>
+                            </div>
+                            <div v-else class="no-data" style="padding: 0.5rem;">No cached results yet.</div>
+                        </div>
                     </div>
                     <div v-else class="no-data">No well output data available.</div>
                 </section>
@@ -367,6 +394,13 @@ createApp({
         const wellVars = ref([]);
         const selectedWellVar = ref('');
 
+        // Export
+        const exportFilename = ref('');
+
+        // Cached results for comparison
+        const cachedResults = ref([]);
+        const comparisonColors = ['#e11d48', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#be185d', '#4f46e5', '#059669'];
+
         // Canvas refs
         const wellCanvas = ref(null);
 
@@ -388,8 +422,19 @@ createApp({
         }
 
         function selectCase(ct) {
+            if (ct === caseType.value) return;
+            if (simStatus.value === 'COMPLETED') {
+                const action = promptSaveResults('Switching to a different application will clear current simulation results.');
+                if (action === 'cancel') return;
+                if (action === 'save') exportCSV();
+            }
             caseType.value = ct;
             loadCaseDefaults(ct);
+        }
+
+        function promptSaveResults(message) {
+            const choice = confirm(message + '\\n\\nPress OK to continue (results will be cleared), or Cancel to stay.\\n\\nTip: Use "Export CSV" or "Cache Current Result" in the Results tab to save your data first.');
+            return choice ? 'continue' : 'cancel';
         }
 
         async function onParamChange() {
@@ -416,6 +461,11 @@ createApp({
         }
 
         function resetDefaults() {
+            if (simStatus.value === 'COMPLETED') {
+                const action = promptSaveResults('Resetting parameters will clear current simulation results.');
+                if (action === 'cancel') return;
+                if (action === 'save') exportCSV();
+            }
             loadCaseDefaults(caseType.value);
         }
 
@@ -469,6 +519,8 @@ createApp({
                 wellVars.value = [];
                 selectedWellVar.value = '';
             }
+            // Set default export filename
+            exportFilename.value = generateDefaultFilename();
             // Switch to results tab and draw after DOM update
             activeTab.value = 'results';
             nextTick(() => {
@@ -541,7 +593,7 @@ createApp({
             }
         }
 
-        // --- Well output drawing ---
+        // --- Well output drawing with comparison support ---
         function drawWellPlot() {
             const data = simResults.value;
             if (!data) return;
@@ -555,6 +607,18 @@ createApp({
             const timestamps = data.timestamps || [];
             const xvals = timestamps.length === yvals.length ? timestamps : yvals.map((_, i) => i);
 
+            // Collect all series (current + visible cached) for axis scaling
+            const allSeries = [{x: xvals, y: yvals, color: '#2563eb', label: 'Current'}];
+            cachedResults.value.forEach((cr, idx) => {
+                if (!cr.visible) return;
+                const cwd = (cr.well_data || {})[wname];
+                if (!cwd) return;
+                const cyvals = cwd[vname];
+                if (!cyvals || cyvals.length === 0) return;
+                const cxvals = (cr.timestamps || []).length === cyvals.length ? cr.timestamps : cyvals.map((_, i) => i);
+                allSeries.push({x: cxvals, y: cyvals, color: comparisonColors[idx % comparisonColors.length], label: cr.label});
+            });
+
             const canvas = wellCanvas.value || document.getElementById('well-canvas');
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
@@ -567,10 +631,12 @@ createApp({
             const pw = W - ml - mr;
             const ph = H - mt - mb;
 
-            const xmin = Math.min(...xvals);
-            const xmax = Math.max(...xvals);
-            const ymin = Math.min(...yvals);
-            const ymax = Math.max(...yvals);
+            // Compute global min/max across all series
+            let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+            allSeries.forEach(s => {
+                s.x.forEach(v => { xmin = Math.min(xmin, v); xmax = Math.max(xmax, v); });
+                s.y.forEach(v => { ymin = Math.min(ymin, v); ymax = Math.max(ymax, v); });
+            });
             const xrange = xmax - xmin || 1;
             const yrange = ymax - ymin || 1;
 
@@ -605,17 +671,22 @@ createApp({
             ctx.moveTo(ml, mt); ctx.lineTo(ml, mt + ph); ctx.lineTo(ml + pw, mt + ph);
             ctx.stroke();
 
-            // Data line
-            ctx.beginPath();
-            ctx.strokeStyle = '#2563eb';
-            ctx.lineWidth = 2;
-            for (let i = 0; i < xvals.length; i++) {
-                const px = toX(xvals[i]);
-                const py = toY(yvals[i]);
-                if (i === 0) ctx.moveTo(px, py);
-                else ctx.lineTo(px, py);
-            }
-            ctx.stroke();
+            // Draw all series
+            allSeries.forEach((s, sIdx) => {
+                ctx.beginPath();
+                ctx.strokeStyle = s.color;
+                ctx.lineWidth = sIdx === 0 ? 2 : 1.5;
+                if (sIdx > 0) ctx.setLineDash([6, 3]);
+                else ctx.setLineDash([]);
+                for (let i = 0; i < s.x.length; i++) {
+                    const px = toX(s.x[i]);
+                    const py = toY(s.y[i]);
+                    if (i === 0) ctx.moveTo(px, py);
+                    else ctx.lineTo(px, py);
+                }
+                ctx.stroke();
+                ctx.setLineDash([]);
+            });
 
             // Axis labels
             ctx.fillStyle = '#1e293b';
@@ -628,7 +699,7 @@ createApp({
             ctx.fillText(vname, 0, 0);
             ctx.restore();
 
-            // Dot for current reservoir timestep
+            // Dot for current reservoir timestep (current series only)
             const stepIdx = currentStep.value;
             if (stepIdx >= 0 && stepIdx < xvals.length) {
                 const dotX = toX(xvals[stepIdx]);
@@ -641,6 +712,98 @@ createApp({
                 ctx.lineWidth = 1.5;
                 ctx.stroke();
             }
+
+            // Legend (if cached results visible)
+            if (allSeries.length > 1) {
+                const legendX = ml + 10;
+                let legendY = mt + 15;
+                ctx.font = '10px sans-serif';
+                allSeries.forEach((s, i) => {
+                    ctx.strokeStyle = s.color;
+                    ctx.lineWidth = i === 0 ? 2 : 1.5;
+                    if (i > 0) ctx.setLineDash([6, 3]);
+                    else ctx.setLineDash([]);
+                    ctx.beginPath();
+                    ctx.moveTo(legendX, legendY);
+                    ctx.lineTo(legendX + 20, legendY);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.fillStyle = '#1e293b';
+                    ctx.textAlign = 'left';
+                    ctx.fillText(s.label, legendX + 25, legendY + 4);
+                    legendY += 14;
+                });
+            }
+        }
+
+        // --- CSV Export ---
+        function generateDefaultFilename() {
+            const ct = caseType.value;
+            const parts = [ct];
+            if (caseInfo.value && caseInfo.value.metadata) {
+                for (const [field, meta] of Object.entries(caseInfo.value.metadata)) {
+                    const val = params[field];
+                    if (val !== undefined) {
+                        parts.push(field + '=' + val);
+                    }
+                }
+            }
+            return parts.join('_') + '.csv';
+        }
+
+        function exportCSV() {
+            const data = simResults.value;
+            if (!data) return;
+            const wd = data.well_data || {};
+            const timestamps = data.timestamps || [];
+            // Build CSV
+            const colNames = ['Time [days]'];
+            const colData = [timestamps];
+            for (const [wname, wdata] of Object.entries(wd)) {
+                for (const [vname, vals] of Object.entries(wdata)) {
+                    if (Array.isArray(vals)) {
+                        colNames.push(wname + ': ' + vname);
+                        colData.push(vals);
+                    }
+                }
+            }
+            const nrows = timestamps.length;
+            let csv = colNames.join(',') + '\\n';
+            for (let i = 0; i < nrows; i++) {
+                const row = colData.map(col => (i < col.length ? col[i] : ''));
+                csv += row.join(',') + '\\n';
+            }
+            // Download
+            const filename = exportFilename.value || generateDefaultFilename();
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename.endsWith('.csv') ? filename : filename + '.csv';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        // --- Cache management ---
+        function cacheCurrentResult() {
+            const data = simResults.value;
+            if (!data) return;
+            const label = caseType.value + ' (' + Object.entries(params).map(([k,v]) => k + '=' + v).slice(0, 3).join(', ') + (Object.keys(params).length > 3 ? ', ...' : '') + ')';
+            cachedResults.value.push({
+                label: label,
+                caseType: caseType.value,
+                well_data: JSON.parse(JSON.stringify(data.well_data)),
+                timestamps: [...data.timestamps],
+                visible: true
+            });
+            nextTick(() => drawWellPlot());
+        }
+
+        function removeCachedResult(idx) {
+            cachedResults.value.splice(idx, 1);
+            nextTick(() => drawWellPlot());
         }
 
         // Update well variables when well changes
@@ -674,10 +837,12 @@ createApp({
             currentImageSrc, imageLoading,
             wellNames, selectedWell, wellVars, selectedWellVar,
             wellCanvas,
+            exportFilename, cachedResults, comparisonColors,
             selectCase, onParamChange, resetDefaults,
             runSimulation, formatValue,
             fetchReservoirImage, drawWellPlot,
-            firstStep, lastStep, prevStep, nextStep
+            firstStep, lastStep, prevStep, nextStep,
+            exportCSV, cacheCurrentResult, removeCachedResult
         };
     }
 }).mount('#app');

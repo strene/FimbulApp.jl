@@ -196,6 +196,54 @@ end
         @test CaseParameters.CASE_CATEGORIES[BTES] == :storage
     end
 
+    @testset "CSV export utilities" begin
+        @testset "generate_csv_filename" begin
+            p = DoubletParams()
+            fname = generate_csv_filename(DOUBLET, p)
+            @test endswith(fname, ".csv")
+            @test startswith(fname, "DOUBLET_")
+            @test occursin("spacing_top=100.0", fname)
+            @test occursin("num_years=100", fname)
+            @test occursin("rate=300.0", fname)
+
+            p2 = EGSParams(fracture_radius=300.0)
+            fname2 = generate_csv_filename(EGS, p2)
+            @test startswith(fname2, "EGS_")
+            @test occursin("fracture_radius=300.0", fname2)
+        end
+
+        @testset "well_data_to_csv" begin
+            timestamps = [0.0, 1.0, 2.0]
+            well_data = Dict(
+                "Well1" => Dict("Temperature [°C]" => [50.0, 48.0, 46.0],
+                                "Pressure [bar]" => [100.0, 99.0, 98.0]),
+                "Well2" => Dict("Temperature [°C]" => [30.0, 31.0, 32.0])
+            )
+            csv = well_data_to_csv(well_data, timestamps)
+            lines = split(strip(csv), "\n")
+            @test length(lines) == 4  # header + 3 data rows
+            header = lines[1]
+            @test occursin("Time [days]", header)
+            @test occursin("Well1: Temperature [°C]", header)
+            @test occursin("Well1: Pressure [bar]", header)
+            @test occursin("Well2: Temperature [°C]", header)
+            # Check data rows have correct number of columns
+            ncols = length(split(header, ","))
+            for i in 2:4
+                @test length(split(lines[i], ",")) == ncols
+            end
+            # Check first data row contains timestamp
+            @test startswith(lines[2], "0.0,")
+        end
+
+        @testset "well_data_to_csv empty" begin
+            csv = well_data_to_csv(Dict{String,Any}(), Float64[])
+            lines = split(strip(csv), "\n")
+            @test length(lines) == 1  # header only
+            @test occursin("Time [days]", lines[1])
+        end
+    end
+
     if HAS_SIM_DEPS
         @testset "SimulationResult" begin
             @testset "Default construction" begin

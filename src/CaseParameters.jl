@@ -9,6 +9,7 @@ module CaseParameters
 export CaseType, DOUBLET, EGS, AGS, ATES, BTES
 export DoubletParams, EGSParams, AGSParams, ATESParams, BTESParams
 export default_params, param_metadata, validate_params
+export well_data_to_csv, generate_csv_filename
 
 """Supported geothermal case types."""
 @enum CaseType DOUBLET EGS AGS ATES BTES
@@ -284,6 +285,56 @@ function dict_to_params(case_type::CaseType, d::AbstractDict)
         end
     end
     return T(; kwargs...)
+end
+
+"""
+    generate_csv_filename(case_type, params) -> String
+
+Generate a default CSV filename based on case type and parameter values.
+Format: `CASETYPE_param1=val1_param2=val2_...paramn=valn.csv`
+"""
+function generate_csv_filename(case_type::CaseType, params)
+    parts = [string(case_type)]
+    for f in fieldnames(typeof(params))
+        v = getfield(params, f)
+        vstr = v isa Integer ? string(v) : string(round(v; digits=4))
+        push!(parts, "$(f)=$(vstr)")
+    end
+    return join(parts, "_") * ".csv"
+end
+
+"""
+    well_data_to_csv(well_data, timestamps) -> String
+
+Convert well data and timestamps to a CSV string.
+`well_data` is a `Dict{String, Dict{String, Vector}}` mapping well names to variable data.
+`timestamps` is a `Vector{Float64}` of time values in days.
+"""
+function well_data_to_csv(well_data::AbstractDict, timestamps::AbstractVector)
+    io = IOBuffer()
+    # Collect all columns: for each well, each variable
+    col_names = String["Time [days]"]
+    col_data = Vector{Float64}[Float64.(timestamps)]
+    for (wname, wdata) in pairs(well_data)
+        for (vname, vals) in pairs(wdata)
+            if vals isa AbstractVector{<:Real}
+                push!(col_names, "$wname: $vname")
+                push!(col_data, Float64.(vals))
+            end
+        end
+    end
+    # Header
+    println(io, join(col_names, ","))
+    # Data rows
+    nrows = length(timestamps)
+    for i in 1:nrows
+        row = String[]
+        for col in col_data
+            push!(row, i <= length(col) ? string(col[i]) : "")
+        end
+        println(io, join(row, ","))
+    end
+    return String(take!(io))
 end
 
 end # module
