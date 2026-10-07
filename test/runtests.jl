@@ -50,7 +50,7 @@ end
             @test p.fracture_spacing == 100.0
             @test p.fracture_aperture == 0.5
             @test p.porosity == 0.01
-            @test p.num_years == 20
+            @test p.num_years == 10
         end
 
         @testset "AGSParams defaults" begin
@@ -138,6 +138,16 @@ end
             p = EGSParams(fracture_radius=-10.0)
             errs = validate_params(p)
             @test any(e -> e[1] == :fracture_radius, errs)
+
+            p = EGSParams(well_depth=150.0)
+            errs = validate_params(p)
+            @test any(e -> e[1] == :well_depth, errs)
+
+            # Out-of-range porosity is rejected at both ends
+            for por in (-0.1, 0.0, 1.5)
+                errs = validate_params(EGSParams(porosity=por))
+                @test any(e -> e[1] == :porosity, errs)
+            end
         end
 
         @testset "AGSParams validation" begin
@@ -147,6 +157,9 @@ end
             p = AGSParams(thermal_gradient=-0.01)
             errs = validate_params(p)
             @test any(e -> e[1] == :thermal_gradient, errs)
+
+            errs = validate_params(AGSParams(porosity=0.0))
+            @test any(e -> e[1] == :porosity, errs)
         end
     end
 
@@ -162,6 +175,21 @@ end
         @test m.label == "Number of wells"
 
         @test isnothing(param_metadata(:nonexistent_field))
+
+        # Case-specific overrides
+        @test param_metadata(BTES, :rate_charge).unit == "L/s"
+        @test param_metadata(ATES, :rate_charge).unit == "m³/h"
+        @test param_metadata(DOUBLET, :spacing_top) == param_metadata(:spacing_top)
+
+        # Every case parameter has metadata and its default lies within the slider range
+        for ct in [DOUBLET, EGS, AGS, ATES, BTES]
+            p = default_params(ct)
+            for f in CaseParameters.param_fields(ct)
+                m = param_metadata(ct, f)
+                @test !isnothing(m)
+                @test m.min <= getfield(p, f) <= m.max
+            end
+        end
     end
 
     @testset "params_to_dict and dict_to_params" begin

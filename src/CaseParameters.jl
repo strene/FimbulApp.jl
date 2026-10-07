@@ -57,16 +57,16 @@ Base.@kwdef mutable struct EGSParams
     fracture_radius::Float64 = 250.0
     fracture_spacing::Float64 = 100.0
     fracture_aperture::Float64 = 0.5
-    well_distance::Float64 = 600.0
+    well_distance::Float64 = 100.0
     lateral_length::Float64 = 1000.0
-    well_depth::Float64 = 4000.0
+    well_depth::Float64 = 2500.0
     porosity::Float64 = 0.01
     permeability::Float64 = 0.1
     rock_thermal_conductivity::Float64 = 2.5
     rock_heat_capacity::Float64 = 900.0
     temperature_inj::Float64 = 25.0
-    rate::Float64 = 100.0
-    num_years::Int = 20
+    rate::Float64 = 360.0
+    num_years::Int = 10
 end
 
 """Parameters for an advanced geothermal system (AGS) simulation."""
@@ -139,8 +139,8 @@ const PARAM_METADATA = Dict(
         tooltip="Distance between fractures along the well lateral"),
     :fracture_aperture => (label="Fracture aperture", unit="mm", min=0.1, max=5.0, step=0.1,
         tooltip="Hydraulic aperture of fractures"),
-    :well_distance => (label="Well distance", unit="m", min=50.0, max=5000.0, step=50.0,
-        tooltip="Distance between injection and production wells"),
+    :well_distance => (label="Well distance", unit="m", min=50.0, max=5000.0, step=10.0,
+        tooltip="Horizontal distance between injection and production wells"),
     :lateral_length => (label="Lateral length", unit="m", min=100.0, max=5000.0, step=50.0,
         tooltip="Length of horizontal well section"),
     :well_depth => (label="Well depth", unit="m", min=500.0, max=8000.0, step=50.0,
@@ -178,6 +178,22 @@ const PARAM_METADATA = Dict(
         tooltip="Rate of temperature increase with depth"),
 )
 
+"""Case-specific metadata overrides for fields whose meaning or unit differs between cases."""
+const CASE_PARAM_METADATA = Dict(
+    BTES => Dict(
+        :well_depth => (label="Borehole depth", unit="m", min=10.0, max=300.0, step=5.0,
+            tooltip="Depth of the BTES boreholes"),
+        :rate_charge => (label="Charge rate", unit="L/s", min=0.1, max=5.0, step=0.1,
+            tooltip="Circulation rate per sector during charging/discharging"),
+    ),
+    ATES => Dict(
+        :porosity => (label="Aquifer porosity", unit="-", min=0.01, max=0.5, step=0.01,
+            tooltip="Porosity of the aquifer layer (fraction)"),
+        :permeability => (label="Aquifer permeability", unit="mD", min=1.0, max=5000.0, step=1.0,
+            tooltip="Permeability of the aquifer layer in millidarcys"),
+    ),
+)
+
 """Return the default parameter struct for a given case type."""
 function default_params(case_type::CaseType)
     case_type == DOUBLET && return DoubletParams()
@@ -188,9 +204,17 @@ function default_params(case_type::CaseType)
     error("Unknown case type: $case_type")
 end
 
-"""Get metadata for a parameter field."""
+"""Get metadata for a parameter field, optionally with case-specific overrides."""
 function param_metadata(field::Symbol)
     return get(PARAM_METADATA, field, nothing)
+end
+
+function param_metadata(case_type::CaseType, field::Symbol)
+    overrides = get(CASE_PARAM_METADATA, case_type, nothing)
+    if !isnothing(overrides) && haskey(overrides, field)
+        return overrides[field]
+    end
+    return param_metadata(field)
 end
 
 """Return parameter field names for a given case type."""
@@ -221,7 +245,11 @@ function validate_params(params::EGSParams)
     params.fracture_spacing <= 0 && push!(errors, (:fracture_spacing, "Must be positive"))
     params.fracture_aperture <= 0 && push!(errors, (:fracture_aperture, "Must be positive"))
     params.well_distance <= 0 && push!(errors, (:well_distance, "Must be positive"))
-    params.porosity <= 0 || params.porosity > 1 && push!(errors, (:porosity, "Must be between 0 and 1"))
+    params.lateral_length <= 0 && push!(errors, (:lateral_length, "Must be positive"))
+    # Wells bend from vertical to horizontal with a 200 m radius
+    params.well_depth <= 200 && push!(errors, (:well_depth, "Must be greater than 200 m"))
+    params.permeability <= 0 && push!(errors, (:permeability, "Must be positive"))
+    (params.porosity <= 0 || params.porosity > 1) && push!(errors, (:porosity, "Must be between 0 and 1"))
     params.rate <= 0 && push!(errors, (:rate, "Must be positive"))
     params.num_years < 1 && push!(errors, (:num_years, "Must be at least 1"))
     return errors
@@ -229,7 +257,7 @@ end
 
 function validate_params(params::AGSParams)
     errors = Tuple{Symbol,String}[]
-    params.porosity <= 0 || params.porosity > 1 && push!(errors, (:porosity, "Must be between 0 and 1"))
+    (params.porosity <= 0 || params.porosity > 1) && push!(errors, (:porosity, "Must be between 0 and 1"))
     params.permeability <= 0 && push!(errors, (:permeability, "Must be positive"))
     params.rate <= 0 && push!(errors, (:rate, "Must be positive"))
     params.thermal_gradient <= 0 && push!(errors, (:thermal_gradient, "Must be positive"))
@@ -242,7 +270,7 @@ function validate_params(params::ATESParams)
     params.well_distance <= 0 && push!(errors, (:well_distance, "Must be positive"))
     params.aquifer_thickness <= 0 && push!(errors, (:aquifer_thickness, "Must be positive"))
     params.depth <= 0 && push!(errors, (:depth, "Must be positive"))
-    params.porosity <= 0 || params.porosity > 1 && push!(errors, (:porosity, "Must be between 0 and 1"))
+    (params.porosity <= 0 || params.porosity > 1) && push!(errors, (:porosity, "Must be between 0 and 1"))
     params.rate_charge <= 0 && push!(errors, (:rate_charge, "Must be positive"))
     params.temperature_charge <= params.temperature_discharge &&
         push!(errors, (:temperature_charge, "Must be greater than discharge temperature"))
@@ -256,6 +284,7 @@ function validate_params(params::BTESParams)
     params.num_sectors < 1 && push!(errors, (:num_sectors, "Must be at least 1"))
     params.num_sectors > params.num_wells && push!(errors, (:num_sectors, "Cannot exceed number of wells"))
     params.well_spacing <= 0 && push!(errors, (:well_spacing, "Must be positive"))
+    params.well_depth <= 0.5 && push!(errors, (:well_depth, "Must be greater than 0.5 m"))
     params.rate_charge <= 0 && push!(errors, (:rate_charge, "Must be positive"))
     params.temperature_charge <= params.temperature_discharge &&
         push!(errors, (:temperature_charge, "Must be greater than discharge temperature"))

@@ -9,8 +9,6 @@ and running geothermal simulations via Fimbul.jl.
 """
 
 using Genie, Genie.Renderer.Html, Genie.Requests
-using JSON3
-using Dates
 
 # Load FimbulApp module
 using FimbulApp
@@ -52,7 +50,7 @@ route("/api/defaults/:case_type") do
     fields = CaseParameters.param_fields(ct)
     meta = Dict{Symbol, Any}()
     for f in fields
-        m = CaseParameters.param_metadata(f)
+        m = CaseParameters.param_metadata(ct, f)
         if !isnothing(m)
             meta[f] = m
         end
@@ -63,6 +61,7 @@ route("/api/defaults/:case_type") do
         :description => CaseParameters.CASE_DESCRIPTIONS[ct],
         :category => string(CaseParameters.CASE_CATEGORIES[ct]),
         :params => d,
+        :fields => [string(f) for f in fields if haskey(meta, f)],
         :metadata => meta,
     ))
 end
@@ -201,7 +200,7 @@ function dashboard_html()
                 <section class="panel param-panel">
                     <h3>⚙️ Parameters</h3>
                     <div class="param-list" v-if="caseInfo">
-                        <div class="param-item" v-for="(meta, field) in caseInfo.metadata" :key="field">
+                        <div class="param-item" v-for="{field, meta} in paramList" :key="field">
                             <div class="param-header">
                                 <label class="param-label" :title="meta.tooltip">
                                     {{ meta.label }}
@@ -248,7 +247,7 @@ function dashboard_html()
                     <div class="summary-section" v-if="caseInfo">
                         <h4>Current Configuration</h4>
                         <table class="summary-table">
-                            <tr v-for="(meta, field) in caseInfo.metadata" :key="field">
+                            <tr v-for="{field, meta} in paramList" :key="field">
                                 <td class="summary-label">{{ meta.label }}</td>
                                 <td class="summary-value">{{ formatValue(params[field]) }}</td>
                                 <td class="summary-unit">{{ meta.unit }}</td>
@@ -403,6 +402,13 @@ createApp({
 
         // Canvas refs
         const wellCanvas = ref(null);
+
+        // Parameters in the order defined by the case struct
+        const paramList = computed(() => {
+            const info = caseInfo.value;
+            if (!info) return [];
+            return info.fields.map(f => ({ field: f, meta: info.metadata[f] }));
+        });
 
         async function loadCaseDefaults(ct) {
             try {
@@ -741,7 +747,7 @@ createApp({
             const ct = caseType.value;
             const parts = [ct];
             if (caseInfo.value && caseInfo.value.metadata) {
-                for (const [field, meta] of Object.entries(caseInfo.value.metadata)) {
+                for (const field of caseInfo.value.fields) {
                     const val = params[field];
                     if (val !== undefined) {
                         parts.push(field + '=' + val);
@@ -830,7 +836,7 @@ createApp({
         });
 
         return {
-            caseType, caseInfo, params, paramErrors,
+            caseType, caseInfo, paramList, params, paramErrors,
             simStatus, simMessage, isValid, activeTab,
             simResults, reservoirVars, selectedReservoirVar,
             currentStep, totalSteps, showDelta,
