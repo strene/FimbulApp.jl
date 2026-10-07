@@ -51,7 +51,7 @@ const _image_cache = Dict{String, String}()
 const _colorrange_cache = Dict{String, Tuple{Float64, Float64}}()
 
 """
-    setup_case(case_type, params) -> (case, info)
+    setup_case(case_type, params) -> JutulCase
 
 Convert user-facing parameters to Fimbul kwargs and create a simulation case.
 """
@@ -67,6 +67,23 @@ function setup_case(case_type::CaseType, params)
             temperature_surface = convert_to_si(params.temperature_surface, :Celsius),
             num_years        = params.num_years,
         )
+    elseif case_type == EGS
+        inj, prod = Fimbul.egs_well_coordinates(;
+            well_depth     = params.well_depth,
+            well_spacing_x = params.well_distance,
+            well_lateral   = params.lateral_length,
+        )
+        return Fimbul.egs(inj, prod, params.fracture_radius, params.fracture_spacing;
+            fracture_aperture        = params.fracture_aperture * 1e-3,
+            porosity                 = params.porosity,
+            permeability             = params.permeability * 1e-3 * _darcy,
+            rock_thermal_conductivity = params.rock_thermal_conductivity * si_unit(:watt) / (si_unit(:meter) * si_unit(:Kelvin)),
+            rock_heat_capacity       = params.rock_heat_capacity * si_unit(:joule) / (si_unit(:kilogram) * si_unit(:Kelvin)),
+            temperature_inj          = convert_to_si(params.temperature_inj, :Celsius),
+            rate                     = params.rate * si_unit(:meter)^3 / si_unit(:hour),
+            num_years                = params.num_years,
+            schedule_args            = (report_interval = si_unit(:year) / 4,),
+        )
     elseif case_type == AGS
         return Fimbul.ags(;
             porosity                 = params.porosity,
@@ -80,19 +97,30 @@ function setup_case(case_type::CaseType, params)
             num_years                = params.num_years,
         )
     elseif case_type == ATES
-        return Fimbul.ates(;
+        # Aquifer properties from the UI; cap rock/basement keep Fimbul defaults
+        conductivity = params.rock_thermal_conductivity * si_unit(:watt) / (si_unit(:meter) * si_unit(:Kelvin))
+        heat_capacity = params.rock_heat_capacity * si_unit(:joule) / (si_unit(:kilogram) * si_unit(:Kelvin))
+        return Fimbul.ates_simple(;
             well_distance            = params.well_distance,
+            aquifer_thickness        = params.aquifer_thickness,
+            depth                    = params.depth,
+            porosity                 = [params.porosity, 0.05],
+            permeability             = [params.permeability, 5.0] .* 1e-3 .* _darcy,
+            rock_thermal_conductivity = [conductivity, conductivity],
+            rock_heat_capacity       = [heat_capacity, heat_capacity],
             temperature_charge       = convert_to_si(params.temperature_charge, :Celsius),
             temperature_discharge    = convert_to_si(params.temperature_discharge, :Celsius),
             rate_charge              = params.rate_charge * si_unit(:meter)^3 / si_unit(:hour),
             temperature_surface      = convert_to_si(params.temperature_surface, :Celsius),
             thermal_gradient         = params.thermal_gradient * si_unit(:Kelvin) / si_unit(:meter),
+            utes_schedule_args       = (num_years = params.num_years,),
         )
     elseif case_type == BTES
         return Fimbul.btes(;
             num_wells            = params.num_wells,
             num_sectors          = params.num_sectors,
             well_spacing         = params.well_spacing,
+            depths               = [0.0, 0.5, params.well_depth, params.well_depth + 15.0],
             temperature_charge   = convert_to_si(params.temperature_charge, :Celsius),
             temperature_discharge = convert_to_si(params.temperature_discharge, :Celsius),
             rate_charge          = params.rate_charge * si_unit(:litre) / si_unit(:second),
@@ -259,7 +287,7 @@ function run_simulation(case_type::CaseType, params)
     try
         result.status = RUNNING
         case = setup_case(case_type, params)
-        sim_result = simulate_reservoir(case[1:5])
+        sim_result = simulate_reservoir(case; info_level = -1)
         result.status = COMPLETED
         result.message = "Simulation completed successfully."
         # Extract well data from results with unit conversion

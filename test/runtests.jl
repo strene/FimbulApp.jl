@@ -50,7 +50,7 @@ end
             @test p.fracture_spacing == 100.0
             @test p.fracture_aperture == 0.5
             @test p.porosity == 0.01
-            @test p.num_years == 20
+            @test p.num_years == 10
         end
 
         @testset "AGSParams defaults" begin
@@ -138,6 +138,16 @@ end
             p = EGSParams(fracture_radius=-10.0)
             errs = validate_params(p)
             @test any(e -> e[1] == :fracture_radius, errs)
+
+            p = EGSParams(well_depth=150.0)
+            errs = validate_params(p)
+            @test any(e -> e[1] == :well_depth, errs)
+
+            # Out-of-range porosity is rejected at both ends
+            for por in (-0.1, 0.0, 1.5)
+                errs = validate_params(EGSParams(porosity=por))
+                @test any(e -> e[1] == :porosity, errs)
+            end
         end
 
         @testset "AGSParams validation" begin
@@ -147,6 +157,9 @@ end
             p = AGSParams(thermal_gradient=-0.01)
             errs = validate_params(p)
             @test any(e -> e[1] == :thermal_gradient, errs)
+
+            errs = validate_params(AGSParams(porosity=0.0))
+            @test any(e -> e[1] == :porosity, errs)
         end
     end
 
@@ -162,6 +175,21 @@ end
         @test m.label == "Number of wells"
 
         @test isnothing(param_metadata(:nonexistent_field))
+
+        # Case-specific overrides
+        @test param_metadata(BTES, :rate_charge).unit == "L/s"
+        @test param_metadata(ATES, :rate_charge).unit == "m³/h"
+        @test param_metadata(DOUBLET, :spacing_top) == param_metadata(:spacing_top)
+
+        # Every case parameter has metadata and its default lies within the slider range
+        for ct in [DOUBLET, EGS, AGS, ATES, BTES]
+            p = default_params(ct)
+            for f in CaseParameters.param_fields(ct)
+                m = param_metadata(ct, f)
+                @test !isnothing(m)
+                @test m.min <= getfield(p, f) <= m.max
+            end
+        end
     end
 
     @testset "params_to_dict and dict_to_params" begin
@@ -194,6 +222,54 @@ end
         @test CaseParameters.CASE_CATEGORIES[AGS] == :production
         @test CaseParameters.CASE_CATEGORIES[ATES] == :storage
         @test CaseParameters.CASE_CATEGORIES[BTES] == :storage
+    end
+
+    @testset "CSV export utilities" begin
+        @testset "generate_csv_filename" begin
+            p = DoubletParams()
+            fname = generate_csv_filename(DOUBLET, p)
+            @test endswith(fname, ".csv")
+            @test startswith(fname, "DOUBLET_")
+            @test occursin("spacing_top=100.0", fname)
+            @test occursin("num_years=100", fname)
+            @test occursin("rate=300.0", fname)
+
+            p2 = EGSParams(fracture_radius=300.0)
+            fname2 = generate_csv_filename(EGS, p2)
+            @test startswith(fname2, "EGS_")
+            @test occursin("fracture_radius=300.0", fname2)
+        end
+
+        @testset "well_data_to_csv" begin
+            timestamps = [0.0, 1.0, 2.0]
+            well_data = Dict(
+                "Well1" => Dict("Temperature [°C]" => [50.0, 48.0, 46.0],
+                                "Pressure [bar]" => [100.0, 99.0, 98.0]),
+                "Well2" => Dict("Temperature [°C]" => [30.0, 31.0, 32.0])
+            )
+            csv = well_data_to_csv(well_data, timestamps)
+            lines = split(strip(csv), "\n")
+            @test length(lines) == 4  # header + 3 data rows
+            header = lines[1]
+            @test occursin("Time [days]", header)
+            @test occursin("Well1: Temperature [°C]", header)
+            @test occursin("Well1: Pressure [bar]", header)
+            @test occursin("Well2: Temperature [°C]", header)
+            # Check data rows have correct number of columns
+            ncols = length(split(header, ","))
+            for i in 2:4
+                @test length(split(lines[i], ",")) == ncols
+            end
+            # Check first data row contains timestamp
+            @test startswith(lines[2], "0.0,")
+        end
+
+        @testset "well_data_to_csv empty" begin
+            csv = well_data_to_csv(Dict{String,Any}(), Float64[])
+            lines = split(strip(csv), "\n")
+            @test length(lines) == 1  # header only
+            @test occursin("Time [days]", lines[1])
+        end
     end
 
     if HAS_SIM_DEPS

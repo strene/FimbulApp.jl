@@ -18,7 +18,11 @@ energy applications using [Fimbul.jl](https://github.com/sintefmath/Fimbul.jl).
 
 ### Prerequisites
 
-- [Julia](https://julialang.org/) ≥ 1.10
+- [Julia](https://julialang.org/) ≥ 1.11
+
+FimbulApp is pinned to **Fimbul.jl v0.3.5**. The simulation backend (Fimbul,
+Jutul, JutulDarcy and CairoMakie) is a regular dependency and is installed
+automatically.
 
 ### Installation
 
@@ -42,26 +46,15 @@ To use a different port:
 FimbulApp.start(port=9000)
 ```
 
-### Running Simulations
-
-To actually run geothermal simulations (not just configure them), install Fimbul.jl
-and JutulDarcy.jl:
-
-```julia
-using Pkg
-Pkg.add("Fimbul")
-Pkg.add("JutulDarcy")
-```
-
-When these packages are loaded, the simulation backend is automatically activated
-via Julia's extension mechanism.
-
 ## Features
 
 - **Intuitive parameter setup** – Configure key simulation properties using sliders
   and text input fields
 - **Real-time validation** – Parameter values are validated as you adjust them
-- **Five case types** – All standard geothermal energy applications supported by Fimbul
+- **Five case types** – Doublet, EGS, AGS, ATES and BTES, set up with the corresponding Fimbul case functions
+- **Interactive results** – Step through 3D reservoir states (absolute or difference from
+  the initial state) alongside well output curves
+- **Export and compare** – Download well output as CSV and overlay cached runs for comparison
 - **Responsive design** – Works on desktop and tablet screens
 - **API-first** – JSON REST API for programmatic access
 
@@ -74,11 +67,10 @@ FimbulApp.jl/
 ├── src/
 │   ├── FimbulApp.jl          # Main module
 │   ├── CaseParameters.jl     # Parameter definitions and validation
-│   └── Simulation.jl         # Simulation interface
-├── ext/
-│   └── FimbulAppSimExt.jl    # Fimbul.jl integration (loaded on demand)
-├── app.jl                    # Web server and routes
+│   └── Simulation.jl         # Fimbul case setup, simulation and image rendering
+├── app.jl                    # Web server, routes and dashboard
 ├── public/css/style.css      # Dashboard styles
+├── public/js/                # Vue.js (bundled)
 └── test/runtests.jl          # Tests
 ```
 
@@ -90,6 +82,13 @@ FimbulApp.jl/
 | GET | `/api/defaults/:case_type` | Default parameters for a case type |
 | POST | `/api/validate` | Validate parameter values |
 | POST | `/api/simulate` | Run a simulation |
+| GET | `/api/reservoir_image/:var/:step?delta=` | Rendered reservoir state (base64 PNG) |
+
+## Known Issues
+
+- **AGS** fails during mesh generation in Fimbul v0.3.5 (`Cannot overwrite face neighbor
+  for cell ...`). This is a Fimbul bug that also affects `Fimbul.ags()` with default
+  arguments; the app reports the error instead of crashing.
 
 ## License
 
