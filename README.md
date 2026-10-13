@@ -46,6 +46,10 @@ To use a different port:
 FimbulApp.start(port=9000)
 ```
 
+Simulations run in a background task while the web server keeps answering
+progress requests. This works best with an interactive thread, which Julia
+≥ 1.12 starts by default. On Julia 1.11, start Julia with `julia -t 1,1`.
+
 ## Features
 
 - **Intuitive parameter setup** – Configure key simulation properties using sliders
@@ -55,6 +59,9 @@ FimbulApp.start(port=9000)
 - **Interactive results** – Step through 3D reservoir states (absolute or difference from
   the initial state) alongside well output curves
 - **Export and compare** – Download well output as CSV and overlay cached runs for comparison
+- **Live progress** – Simulations run in the background with a progress bar, runtime and ETA
+- **Console** – Read-only view of the simulation output (Fimbul setup messages and Jutul's
+  progress/timing report), as it would appear in the Julia REPL
 - **Responsive design** – Works on desktop and tablet screens
 - **API-first** – JSON REST API for programmatic access
 
@@ -67,6 +74,7 @@ FimbulApp.jl/
 ├── src/
 │   ├── FimbulApp.jl          # Main module
 │   ├── CaseParameters.jl     # Parameter definitions and validation
+│   ├── Console.jl            # Output capture and terminal emulation for the console tab
 │   └── Simulation.jl         # Fimbul case setup, simulation and image rendering
 ├── app.jl                    # Web server, routes and dashboard
 ├── public/css/style.css      # Dashboard styles
@@ -81,7 +89,9 @@ FimbulApp.jl/
 | GET | `/` | Dashboard UI |
 | GET | `/api/defaults/:case_type` | Default parameters for a case type |
 | POST | `/api/validate` | Validate parameter values |
-| POST | `/api/simulate` | Run a simulation |
+| POST | `/api/simulate` | Start a simulation in the background |
+| GET | `/api/simulation/status?since=` | Progress, runtime, ETA and console output (console lines only if changed since version `since`) |
+| GET | `/api/simulation/result` | Results of the most recent simulation |
 | GET | `/api/reservoir_image/:var/:step?delta=` | Rendered reservoir state (base64 PNG) |
 
 ## Known Issues

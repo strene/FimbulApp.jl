@@ -3,6 +3,8 @@ using Test
 # Load the CaseParameters module directly for testing
 include(joinpath(@__DIR__, "..", "src", "CaseParameters.jl"))
 using .CaseParameters
+include(joinpath(@__DIR__, "..", "src", "Console.jl"))
+using .Console
 
 # Try to load Simulation module (requires Fimbul, Jutul, JutulDarcy, CairoMakie)
 const HAS_SIM_DEPS = try
@@ -224,6 +226,74 @@ end
         @test CaseParameters.CASE_CATEGORIES[BTES] == :storage
     end
 
+    @testset "Console buffer" begin
+        @testset "Plain text and newlines" begin
+            cb = ConsoleBuffer()
+            feed!(cb, "hello\nworld\n")
+            @test console_lines(cb) == ["hello", "world"]
+            v = console_version(cb)
+            feed!(cb, "!")
+            @test console_version(cb) > v
+            @test console_lines(cb) == ["hello", "world", "!"]
+        end
+
+        @testset "Carriage return and clear line" begin
+            cb = ConsoleBuffer()
+            feed!(cb, "Progress  10%\e[K\rProgress  50%\e[K\rDone\e[K\n")
+            @test console_lines(cb) == ["Done"]
+        end
+
+        @testset "Multi-line progress redraw" begin
+            # Pattern emitted by ProgressMeter with showvalues (as captured from Jutul):
+            # bar + two value lines, cursor back up to the bar, cleared before each redraw
+            frame(p, step) = "\rProgress $(p)%\e[K\r\n   Progress: step $step\e[K\r\n      Stats: $step its\e[K\r\e[A\r\e[A"
+            clear = "\n\n\r\e[K\e[A\r\e[K\e[A"
+            cb = ConsoleBuffer()
+            feed!(cb, "Header\n")
+            feed!(cb, frame(10, 1))
+            feed!(cb, clear * frame(90, 9))
+            feed!(cb, "\n\n\nTable\n")
+            @test console_lines(cb) == ["Header", "Progress 90%", "   Progress: step 9", "      Stats: 9 its", "Table"]
+        end
+
+        @testset "Split UTF-8 and escape sequences" begin
+            cb = ConsoleBuffer()
+            bytes = Vector{UInt8}(codeunits("██ ok\e[31mred\e[0m"))
+            # Split inside the 3-byte '█' and inside the color escape sequence
+            feed!(cb, bytes[1:2])
+            feed!(cb, bytes[3:12])
+            feed!(cb, bytes[13:end])
+            @test console_lines(cb) == ["██ okred"]
+        end
+
+        @testset "Line limit" begin
+            cb = ConsoleBuffer()
+            feed!(cb, join(string.(1:(Console.MAX_LINES + 10)), "\n"))
+            lines = console_lines(cb)
+            @test length(lines) == Console.MAX_LINES
+            @test lines[end] == string(Console.MAX_LINES + 10)
+        end
+
+        @testset "capture_output" begin
+            cb = ConsoleBuffer()
+            r = capture_output(cb; echo=false) do
+                println("from stdout")
+                println(stderr, "from stderr")
+                @info "a log message"
+                42
+            end
+            @test r == 42
+            lines = console_lines(cb)
+            @test "from stdout" in lines
+            @test "from stderr" in lines
+            @test any(l -> occursin("a log message", l), lines)
+            # Output after the capture is not recorded
+            n = length(lines)
+            println("not captured")
+            @test length(console_lines(cb)) == n
+        end
+    end
+
     @testset "CSV export utilities" begin
         @testset "generate_csv_filename" begin
             p = DoubletParams()
@@ -284,6 +354,7 @@ end
                 @test isempty(r.reservoir_images)
                 @test isempty(r.reservoir_vars)
                 @test r.num_steps == 0
+                @test !r.partial
             end
 
             @testset "ReservoirState" begin
@@ -349,6 +420,32 @@ end
                 result = generate_reservoir_images!(r, nothing, [])
                 @test result == false
                 @test isempty(r.reservoir_images)
+            end
+
+            @testset "Background simulation job" begin
+                @test job_status(nothing)[:status] == "IDLE"
+                # Invalid parameters make the job fail quickly without running Fimbul
+                job = start_simulation_job(DOUBLET, DoubletParams(rate=-1.0))
+                @test !isnothing(job)
+                t0 = time()
+                while job.status == RUNNING && time() - t0 < 60
+                    sleep(0.1)
+                end
+                @test job.status == FAILED
+                @test job.phase == "Failed"
+                st = job_status(job)
+                @test st[:status] == "FAILED"
+                @test isnothing(st[:eta])
+                @test occursin("rate", st[:message])
+                @test any(l -> occursin("run_simulation(DOUBLET", l), st[:console])
+                # Console lines are omitted when the client is up to date
+                @test !haskey(job_status(job; since=st[:console_version]), :console)
+                # A new job can start once the previous one has finished
+                job2 = start_simulation_job(DOUBLET, DoubletParams(rate=-1.0))
+                @test job2.id == job.id + 1
+                while job2.status == RUNNING
+                    sleep(0.1)
+                end
             end
 
             @testset "render_reservoir_image without simulation" begin

@@ -85,14 +85,40 @@ route("/api/simulate", method=POST) do
     ct = parse_case_type(get(data, "case_type", ""))
     isnothing(ct) && return Genie.Renderer.respond("Invalid case type", :text, status=400)
     params = CaseParameters.dict_to_params(ct, data["params"])
-    result = run_simulation(ct, params)
+    errors = validate_params(params)
+    if !isempty(errors)
+        return Genie.Renderer.Json.json(Dict(
+            :status => "FAILED",
+            :message => join(["$(e[1]): $(e[2])" for e in errors], "; "),
+        ))
+    end
+    job = start_simulation_job(ct, params)
+    if isnothing(job)
+        return Genie.Renderer.Json.json(
+            Dict(:status => "RUNNING", :message => "A simulation is already running."), status=409)
+    end
+    return Genie.Renderer.Json.json(Dict(:status => "RUNNING", :id => job.id))
+end
+
+route("/api/simulation/status") do
+    since = something(tryparse(Int, get(Genie.Requests.getpayload(), "since", "-1")), -1)
+    return Genie.Renderer.Json.json(job_status(current_job(); since=since))
+end
+
+route("/api/simulation/result") do
+    job = current_job()
+    (isnothing(job) || isnothing(job.result)) &&
+        return Genie.Renderer.respond("No result available", :text, status=404)
+    result = job.result
     return Genie.Renderer.Json.json(Dict(
+        :id => job.id,
         :status => string(result.status),
         :message => result.message,
         :well_data => result.well_data,
         :timestamps => result.timestamps,
         :reservoir_vars => result.reservoir_vars,
         :num_steps => result.num_steps,
+        :partial => result.partial,
     ))
 end
 
@@ -151,22 +177,22 @@ function dashboard_html()
     <nav class="case-nav">
         <div class="nav-section">
             <span class="nav-label">Energy Production</span>
-            <button class="case-btn" :class="{active: caseType === 'DOUBLET'}" @click="selectCase('DOUBLET')">
+            <button class="case-btn" :class="{active: caseType === 'DOUBLET'}" @click="selectCase('DOUBLET')" :disabled="simStatus === 'RUNNING'">
                 Doublet
             </button>
-            <button class="case-btn" :class="{active: caseType === 'EGS'}" @click="selectCase('EGS')">
+            <button class="case-btn" :class="{active: caseType === 'EGS'}" @click="selectCase('EGS')" :disabled="simStatus === 'RUNNING'">
                 EGS
             </button>
-            <button class="case-btn" :class="{active: caseType === 'AGS'}" @click="selectCase('AGS')">
+            <button class="case-btn" :class="{active: caseType === 'AGS'}" @click="selectCase('AGS')" :disabled="simStatus === 'RUNNING'">
                 AGS
             </button>
         </div>
         <div class="nav-section">
             <span class="nav-label">Energy Storage</span>
-            <button class="case-btn" :class="{active: caseType === 'ATES'}" @click="selectCase('ATES')">
+            <button class="case-btn" :class="{active: caseType === 'ATES'}" @click="selectCase('ATES')" :disabled="simStatus === 'RUNNING'">
                 ATES
             </button>
-            <button class="case-btn" :class="{active: caseType === 'BTES'}" @click="selectCase('BTES')">
+            <button class="case-btn" :class="{active: caseType === 'BTES'}" @click="selectCase('BTES')" :disabled="simStatus === 'RUNNING'">
                 BTES
             </button>
         </div>
@@ -181,6 +207,10 @@ function dashboard_html()
             :disabled="simStatus !== 'COMPLETED'"
             @click="activeTab = 'results'">
             📊 Results
+        </button>
+        <button class="tab-btn" :class="{active: activeTab === 'console'}" @click="openConsole">
+            🖥️ Console
+            <span class="tab-running-dot" v-if="simStatus === 'RUNNING'" title="Simulation running"></span>
         </button>
     </div>
 
@@ -221,7 +251,7 @@ function dashboard_html()
                         </div>
                     </div>
                     <div class="param-actions">
-                        <button class="btn btn-reset" @click="resetDefaults">↺ Reset Defaults</button>
+                        <button class="btn btn-reset" @click="resetDefaults" :disabled="simStatus === 'RUNNING'">↺ Reset Defaults</button>
                     </div>
                 </section>
 
@@ -237,8 +267,23 @@ function dashboard_html()
                         </button>
                     </div>
 
-                    <div class="sim-status" v-if="simMessage">
-                        <div :class="'status-' + simStatus.toLowerCase()">
+                    <div class="sim-progress" v-if="simStatus === 'RUNNING'">
+                        <div class="progress-header">
+                            <span class="progress-phase">{{ simPhase }}</span>
+                            <span class="progress-numbers">{{ progressPercent }}</span>
+                        </div>
+                        <div class="progress-track" :class="{indeterminate: simPhase !== 'Simulating'}">
+                            <div class="progress-fill" :style="{width: (simProgress * 100) + '%'}"></div>
+                        </div>
+                        <div class="progress-times">
+                            <span>Runtime {{ formatElapsed(simElapsed) }}</span>
+                            <span>{{ etaText }}</span>
+                        </div>
+                        <button class="btn-link" @click="openConsole">Show console output →</button>
+                    </div>
+
+                    <div class="sim-status" v-if="simMessage && simStatus !== 'RUNNING'">
+                        <div :class="simPartial ? 'status-warning' : 'status-' + simStatus.toLowerCase()">
                             {{ simMessage }}
                         </div>
                     </div>
@@ -351,6 +396,26 @@ function dashboard_html()
             </div>
         </div>
 
+        <!-- ============ CONSOLE TAB ============ -->
+        <div v-show="activeTab === 'console'">
+            <section class="panel console-panel">
+                <div class="console-header">
+                    <h3>🖥️ Console <span class="console-readonly">read-only</span></h3>
+                    <div class="console-progress" v-if="simStatus === 'RUNNING'">
+                        <span class="progress-phase">{{ simPhase }}</span>
+                        <div class="progress-track small" :class="{indeterminate: simPhase !== 'Simulating'}">
+                            <div class="progress-fill" :style="{width: (simProgress * 100) + '%'}"></div>
+                        </div>
+                        <span class="progress-numbers">{{ progressPercent }} · Runtime {{ formatElapsed(simElapsed) }} · {{ etaText }}</span>
+                    </div>
+                    <div v-else-if="simMessage" :class="'console-state ' + (simPartial ? 'status-warning' : 'status-' + simStatus.toLowerCase())">
+                        {{ simPartial ? 'Stopped early' : simStatus === 'COMPLETED' ? 'Completed' : simStatus === 'FAILED' ? 'Failed' : '' }}
+                    </div>
+                </div>
+                <pre class="console-output" ref="consoleEl" @scroll="onConsoleScroll"><template v-if="consoleLines.length">{{ consoleText }}</template><span v-else class="console-empty">Simulation output will appear here when you run a simulation.</span></pre>
+            </section>
+        </div>
+
     </main>
 
     <!-- Footer -->
@@ -376,6 +441,26 @@ createApp({
         const simMessage = ref('');
         const isValid = ref(true);
         const activeTab = ref('setup');
+
+        // Background simulation progress and console output
+        const simPhase = ref('');
+        const simProgress = ref(0);
+        const simElapsed = ref(0);
+        const simEta = ref(null);
+        const etaText = computed(() => {
+            if (simPhase.value !== 'Simulating') return 'ETA –';
+            return simEta.value === null ? 'ETA estimating…' : 'ETA ' + formatElapsed(simEta.value);
+        });
+        const jobId = ref(null);
+        const simPartial = ref(false);
+        const consoleLines = ref([]);
+        const consoleEl = ref(null);
+        let consoleVersion = -1;
+        let consoleFollow = true;
+        let pollTimer = null;
+        const consoleText = computed(() => consoleLines.value.join(String.fromCharCode(10)));
+        const progressPercent = computed(() =>
+            simPhase.value === 'Simulating' ? (simProgress.value * 100).toFixed(1) + '%' : '…');
 
         // Results data
         const simResults = ref(null);
@@ -477,7 +562,12 @@ createApp({
 
         async function runSimulation() {
             simStatus.value = 'RUNNING';
-            simMessage.value = 'Setting up and running simulation...';
+            simMessage.value = '';
+            simPartial.value = false;
+            simPhase.value = 'Starting';
+            simProgress.value = 0;
+            simElapsed.value = 0;
+            simEta.value = null;
             try {
                 const resp = await fetch('/api/simulate', {
                     method: 'POST',
@@ -488,16 +578,100 @@ createApp({
                     })
                 });
                 const data = await resp.json();
-                simStatus.value = data.status;
-                simMessage.value = data.message;
-                if (data.status === 'COMPLETED') {
-                    simResults.value = data;
-                    populateResults(data);
+                if (data.status !== 'RUNNING' || resp.status === 409) {
+                    simStatus.value = resp.status === 409 ? 'RUNNING' : data.status;
+                    simMessage.value = data.message || '';
+                    if (resp.status !== 409) return;
                 }
+                jobId.value = data.id;
+                schedulePoll(0);
             } catch (e) {
                 simStatus.value = 'FAILED';
                 simMessage.value = 'Request failed: ' + e.message;
             }
+        }
+
+        function schedulePoll(delay) {
+            clearTimeout(pollTimer);
+            pollTimer = setTimeout(pollStatus, delay);
+        }
+
+        async function pollStatus() {
+            let data;
+            try {
+                const resp = await fetch('/api/simulation/status?since=' + consoleVersion);
+                data = await resp.json();
+            } catch (e) {
+                // Server busy or restarting; try again shortly
+                if (simStatus.value === 'RUNNING') schedulePoll(2000);
+                return;
+            }
+            updateConsole(data);
+            if (data.status === 'IDLE') return;
+            simPhase.value = data.phase;
+            simProgress.value = data.progress;
+            simElapsed.value = data.elapsed;
+            simEta.value = data.eta;
+            if (data.status === 'RUNNING') {
+                simStatus.value = 'RUNNING';
+                jobId.value = data.id;
+                schedulePoll(500);
+            } else if (simStatus.value === 'RUNNING' && data.id === jobId.value) {
+                await finishSimulation(data);
+            }
+        }
+
+        async function finishSimulation(status) {
+            simMessage.value = status.message;
+            if (status.status !== 'COMPLETED') {
+                simStatus.value = status.status;
+                return;
+            }
+            try {
+                const resp = await fetch('/api/simulation/result');
+                const data = await resp.json();
+                simStatus.value = data.status;
+                simPartial.value = data.partial;
+                simResults.value = data;
+                populateResults(data);
+            } catch (e) {
+                simStatus.value = 'FAILED';
+                simMessage.value = 'Failed to fetch results: ' + e.message;
+            }
+        }
+
+        // --- Console ---
+        function updateConsole(data) {
+            if (data.console === undefined) return;
+            consoleVersion = data.console_version;
+            consoleLines.value = data.console;
+            if (consoleFollow) nextTick(scrollConsoleToBottom);
+        }
+
+        function scrollConsoleToBottom() {
+            const el = consoleEl.value;
+            if (el) el.scrollTop = el.scrollHeight;
+        }
+
+        function onConsoleScroll() {
+            const el = consoleEl.value;
+            if (!el) return;
+            // Follow new output only while the user is at the bottom
+            consoleFollow = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+        }
+
+        function openConsole() {
+            activeTab.value = 'console';
+            consoleFollow = true;
+            nextTick(scrollConsoleToBottom);
+        }
+
+        function formatElapsed(seconds) {
+            const s = Math.floor(seconds || 0);
+            const h = Math.floor(s / 3600);
+            const m = Math.floor((s % 3600) / 60);
+            if (h > 0) return h + ' h ' + m + ' min';
+            return m > 0 ? m + ' min ' + (s % 60) + ' s' : s + ' s';
         }
 
         function populateResults(data) {
@@ -527,8 +701,8 @@ createApp({
             }
             // Set default export filename
             exportFilename.value = generateDefaultFilename();
-            // Switch to results tab and draw after DOM update
-            activeTab.value = 'results';
+            // Switch to results tab (unless the user is watching the console) and draw after DOM update
+            if (activeTab.value === 'setup') activeTab.value = 'results';
             nextTick(() => {
                 fetchReservoirImage();
                 drawWellPlot();
@@ -831,13 +1005,32 @@ createApp({
             return v;
         }
 
-        onMounted(() => {
-            loadCaseDefaults(caseType.value);
+        onMounted(async () => {
+            await loadCaseDefaults(caseType.value);
+            // Pick up console output and any simulation already running on the server
+            try {
+                const resp = await fetch('/api/simulation/status');
+                const data = await resp.json();
+                updateConsole(data);
+                if (data.status === 'RUNNING') {
+                    if (data.case_type !== caseType.value) {
+                        caseType.value = data.case_type;
+                        await loadCaseDefaults(data.case_type);
+                    }
+                    simStatus.value = 'RUNNING';
+                    jobId.value = data.id;
+                    schedulePoll(0);
+                }
+            } catch (e) {
+                console.error('Failed to fetch simulation status:', e);
+            }
         });
 
         return {
             caseType, caseInfo, paramList, params, paramErrors,
             simStatus, simMessage, isValid, activeTab,
+            simPhase, simProgress, simElapsed, simPartial, etaText, progressPercent, formatElapsed,
+            consoleLines, consoleText, consoleEl, onConsoleScroll, openConsole,
             simResults, reservoirVars, selectedReservoirVar,
             currentStep, totalSteps, showDelta,
             currentImageSrc, imageLoading,
