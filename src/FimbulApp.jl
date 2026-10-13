@@ -27,9 +27,11 @@ Then open http://localhost:8000 in a browser.
 module FimbulApp
 
 include("CaseParameters.jl")
+include("Console.jl")
 include("Simulation.jl")
 
 using .CaseParameters
+using .Console
 using .Simulation
 
 export start

@@ -7,12 +7,15 @@ This module provides the simulation API that bridges the web UI with Fimbul.jl.
 module Simulation
 
 using ..CaseParameters
+using ..Console
 using Fimbul, Jutul, JutulDarcy, CairoMakie
 import Base64: base64encode
+import Printf: @sprintf
 
 export SimulationStatus, IDLE, RUNNING, COMPLETED, FAILED
 export SimulationResult, run_simulation, setup_case, ReservoirState
 export convert_well_data, generate_reservoir_images!, render_reservoir_image
+export SimulationJob, start_simulation_job, current_job, job_status
 
 @enum SimulationStatus IDLE RUNNING COMPLETED FAILED
 
@@ -31,7 +34,8 @@ mutable struct SimulationResult
     reservoir_images::Dict{String, Vector{String}}
     reservoir_vars::Vector{String}
     num_steps::Int
-    SimulationResult() = new(IDLE, "", Dict{String, Any}(), Float64[], ReservoirState[], Dict{String, Vector{String}}(), String[], 0)
+    partial::Bool  # Simulator stopped before the end of the schedule
+    SimulationResult() = new(IDLE, "", Dict{String, Any}(), Float64[], ReservoirState[], Dict{String, Vector{String}}(), String[], 0, false)
 end
 
 # Unit helpers using JutulDarcy SI units
@@ -271,12 +275,18 @@ function render_reservoir_image(var::AbstractString, step::Int; delta::Bool=fals
 end
 
 """
-    run_simulation(case_type, params) -> SimulationResult
+    run_simulation(case_type, params; info_level=-1, on_progress=nothing, on_phase=nothing) -> SimulationResult
 
 Run a Fimbul simulation with the given parameters.
 Returns a SimulationResult with status and data.
+
+`info_level` is passed on to Jutul (0 shows a progress bar on stdout).
+`on_progress(fraction)` is called after each converged ministep with the
+fraction of simulated time completed, and `on_phase(name)` when the run moves
+to a new phase (setup, simulation, post-processing).
 """
-function run_simulation(case_type::CaseType, params)
+function run_simulation(case_type::CaseType, params;
+        info_level::Int = -1, on_progress = nothing, on_phase = nothing)
     result = SimulationResult()
     errors = validate_params(params)
     if !isempty(errors)
@@ -284,14 +294,39 @@ function run_simulation(case_type::CaseType, params)
         result.message = join(["$(e[1]): $(e[2])" for e in errors], "; ")
         return result
     end
+    phase! = name -> isnothing(on_phase) || on_phase(name)
     try
         result.status = RUNNING
+        phase!("Setting up case")
         case = setup_case(case_type, params)
-        sim_result = simulate_reservoir(case; info_level = -1)
-        result.status = COMPLETED
-        result.message = "Simulation completed successfully."
-        # Extract well data from results with unit conversion
+        phase!("Simulating")
+        sim_kwargs = (info_level = info_level,)
+        if !isnothing(on_progress)
+            t_total = sum(case.dt)
+            t_done = Ref(0.0)
+            hook = (done, report, sim, dt, forces, max_iter, cfg) -> begin
+                if done
+                    t_done[] += dt
+                    on_progress(min(t_done[] / t_total, 1.0))
+                end
+                return (done, report)
+            end
+            sim_kwargs = (sim_kwargs..., post_ministep_hook = hook)
+        end
+        sim_result = simulate_reservoir(case; sim_kwargs...)
+        phase!("Processing results")
         ws, states, t = sim_result
+        result.status = COMPLETED
+        num_planned = length(case.dt)
+        if length(states) < num_planned
+            # Jutul returns the steps solved so far when it gives up (e.g. convergence failure)
+            result.partial = true
+            result.message = "Simulation stopped early: solved $(length(states)) of $num_planned report steps. " *
+                "Showing partial results."
+        else
+            result.message = "Simulation completed successfully."
+        end
+        # Extract well data from results with unit conversion
         for (wname, wdata) in pairs(ws)
             result.well_data[string(wname)] = convert_well_data(wdata)
         end
@@ -314,8 +349,137 @@ function run_simulation(case_type::CaseType, params)
     catch e
         result.status = FAILED
         result.message = "Simulation failed: $(sprint(showerror, e))"
+        if info_level >= 0
+            # Show the full error in the console
+            showerror(stderr, e, catch_backtrace())
+            println(stderr)
+        end
     end
     return result
+end
+
+# --- Background simulation jobs ---
+
+"""State of a simulation running in the background, polled by the web UI."""
+mutable struct SimulationJob
+    id::Int
+    case_type::CaseType
+    params::Any
+    status::SimulationStatus
+    phase::String
+    progress::Float64
+    started::Float64
+    sim_started::Float64  # Start of the time-stepping phase (NaN before)
+    finished::Float64
+    console::ConsoleBuffer
+    result::Union{Nothing, SimulationResult}
+end
+
+const _job = Ref{Union{Nothing, SimulationJob}}(nothing)
+const _job_lock = ReentrantLock()
+const _console = ConsoleBuffer()  # Shared across runs so earlier output stays visible
+
+"""Return the most recent simulation job, or `nothing`."""
+current_job() = _job[]
+
+"""
+    start_simulation_job(case_type, params) -> Union{SimulationJob, Nothing}
+
+Start a simulation in a background task. Output is captured in the shared
+console buffer and progress is tracked on the returned job. Returns `nothing`
+if a simulation is already running.
+"""
+function start_simulation_job(case_type::CaseType, params)
+    job = lock(_job_lock) do
+        prev = _job[]
+        !isnothing(prev) && prev.status == RUNNING && return nothing
+        id = isnothing(prev) ? 1 : prev.id + 1
+        j = SimulationJob(id, case_type, params, RUNNING, "Queued", 0.0, time(), NaN, NaN, _console, nothing)
+        _job[] = j
+        j
+    end
+    isnothing(job) && return nothing
+    # Run on the default thread pool so the web server stays responsive
+    Threads.@spawn _run_job(job)
+    return job
+end
+
+function _run_job(job::SimulationJob)
+    cb = job.console
+    params_str = join(["$f = $(getfield(job.params, f))" for f in fieldnames(typeof(job.params))], ", ")
+    println(cb, "")
+    println(cb, "julia> run_simulation($(job.case_type); $params_str)")
+    result = try
+        capture_output(cb) do
+            run_simulation(job.case_type, job.params;
+                info_level = 0,
+                on_phase = name -> begin
+                    name == "Simulating" && (job.sim_started = time())
+                    job.phase = name
+                    yield()
+                end,
+                # Yield so that status requests are served between ministeps
+                on_progress = frac -> (job.progress = frac; yield()),
+            )
+        end
+    catch e
+        r = SimulationResult()
+        r.status = FAILED
+        r.message = "Simulation failed: $(sprint(showerror, e))"
+        r
+    end
+    job.finished = time()
+    elapsed = @sprintf("%.1f", job.finished - job.started)
+    if result.status == COMPLETED && result.partial
+        println(cb, "⚠ $(result.message) ($elapsed s)")
+    elseif result.status == COMPLETED
+        job.progress = 1.0
+        println(cb, "✔ Simulation completed in $elapsed s")
+    else
+        println(cb, "✘ $(result.message)")
+    end
+    job.result = result
+    job.phase = result.status == COMPLETED ? "Completed" : "Failed"
+    job.status = result.status
+    return job
+end
+
+"""
+    job_status(job; since=-1) -> Dict
+
+Summary of a job for the web UI. Console lines are only included when the
+console has changed since version `since`.
+"""
+function job_status(job::Union{Nothing, SimulationJob}; since::Int = -1)
+    version = console_version(_console)
+    d = Dict{Symbol, Any}(
+        :console_version => version,
+    )
+    if version != since
+        d[:console] = console_lines(_console)
+    end
+    if isnothing(job)
+        d[:status] = string(IDLE)
+        return d
+    end
+    t_end = isnan(job.finished) ? time() : job.finished
+    d[:id] = job.id
+    d[:case_type] = string(job.case_type)
+    d[:status] = string(job.status)
+    d[:phase] = job.phase
+    d[:progress] = job.progress
+    d[:elapsed] = t_end - job.started
+    # Estimate remaining time from the time-stepping rate so far. Progress is
+    # measured in simulated time, so this is only an estimate.
+    eta = nothing
+    if job.status == RUNNING && job.phase == "Simulating" && job.progress >= 0.01
+        sim_elapsed = time() - job.sim_started
+        eta = sim_elapsed * (1 - job.progress) / job.progress
+    end
+    d[:eta] = eta
+    d[:message] = isnothing(job.result) ? "" : job.result.message
+    d[:partial] = !isnothing(job.result) && job.result.partial
+    return d
 end
 
 end # module
